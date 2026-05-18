@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppFrame } from "@/components/frame";
 import { useT } from "@/components/theme";
 import {
@@ -95,12 +95,40 @@ export function BacktestIndexView({
 
   const [sortKey, setSortKey] = useState<SortKey>("ran");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [hidden, setHidden] = useState<number[]>([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("psx_hidden_backtests");
+      setHidden(raw ? (JSON.parse(raw) as number[]) : []);
+    } catch {
+      setHidden([]);
+    }
+  }, []);
+
+  function hideBacktest(id: number) {
+    setHidden((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id];
+      localStorage.setItem("psx_hidden_backtests", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function showAll() {
+    setHidden([]);
+    localStorage.removeItem("psx_hidden_backtests");
+  }
 
   const sorted = useMemo(() => {
     const copy = rows.slice();
     copy.sort((a, b) => compare(a, b, sortKey, sortDir));
     return copy;
   }, [rows, sortKey, sortDir]);
+
+  const visible = useMemo(
+    () => sorted.filter((r) => !hidden.includes(r.id)),
+    [sorted, hidden],
+  );
 
   const total = rows.length;
   const empty = total === 0;
@@ -167,7 +195,10 @@ export function BacktestIndexView({
           ) : (
             <>
               <SortBar sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }} />
-              <RunsTable rows={sorted} />
+              {hidden.length > 0 && (
+                <HiddenToggle count={hidden.length} onShowAll={showAll} />
+              )}
+              <RunsTable rows={visible} onHide={hideBacktest} />
             </>
           )}
         </div>
@@ -289,9 +320,42 @@ function SortBar({
   );
 }
 
-function RunsTable({ rows }: { rows: RunRow[] }) {
+function HiddenToggle({ count, onShowAll }: { count: number; onShowAll: () => void }) {
+  const T = useT();
+  return (
+    <div
+      style={{
+        fontFamily: T.fontMono,
+        fontSize: 11,
+        color: T.text3,
+        marginBottom: 10,
+      }}
+    >
+      {count} hidden ·{" "}
+      <button
+        type="button"
+        onClick={onShowAll}
+        style={{
+          fontFamily: T.fontMono,
+          fontSize: 11,
+          color: T.text3,
+          textDecoration: "underline",
+          cursor: "pointer",
+          border: "none",
+          background: "none",
+          padding: 0,
+        }}
+      >
+        show all
+      </button>
+    </div>
+  );
+}
+
+function RunsTable({ rows, onHide }: { rows: RunRow[]; onHide: (id: number) => void }) {
   const T = useT();
   const router = useRouter();
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const cols: Col[] = [
     { label: "strategy", width: "1.4fr", primary: true, mono: false },
     { label: "window", width: "1fr", mono: true },
@@ -300,7 +364,7 @@ function RunsTable({ rows }: { rows: RunRow[] }) {
     { label: "max DD", align: "right", width: "80px" },
     { label: "trades", align: "right", width: "70px" },
     { label: "ran", align: "right", width: "100px", mobileFullWidth: true },
-    { label: "", width: "32px", align: "right" },
+    { label: "", width: "80px", align: "right" },
   ];
 
   type Cell = ReactNode | string | number;
@@ -317,7 +381,7 @@ function RunsTable({ rows }: { rows: RunRow[] }) {
       maxDD === null ? "—" : `${maxDD.toFixed(1)}%`,
       r.totalTrades.toLocaleString(),
       r.ranLabel,
-      "→",
+      null,
     ];
   });
 
@@ -356,7 +420,46 @@ function RunsTable({ rows }: { rows: RunRow[] }) {
           );
         }
         if (ci === 7) {
-          return <span style={{ color: T.text3, fontSize: 13 }}>{cell as ReactNode}</span>;
+          if (confirmingId === row.id) {
+            return (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: T.fontMono, fontSize: 11 }}>
+                <span style={{ color: T.text3 }}>hide?</span>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onHide(row.id); setConfirmingId(null); }}
+                  style={{ color: T.loss, border: "none", background: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
+                >
+                  yes
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setConfirmingId(null); }}
+                  style={{ color: T.text3, border: "none", background: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
+                >
+                  no
+                </button>
+              </span>
+            );
+          }
+          return (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setConfirmingId(row.id); }}
+              style={{
+                color: T.text3,
+                fontSize: 13,
+                border: "none",
+                background: "none",
+                padding: 0,
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = T.loss; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = T.text3; }}
+            >
+              ×
+            </button>
+          );
         }
         return cell as ReactNode;
       }}
