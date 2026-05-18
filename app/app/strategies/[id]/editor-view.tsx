@@ -3632,6 +3632,24 @@ function ConditionDrawer({
           <div
             role="tablist"
             aria-label="Value input mode"
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              const order: ValueMode[] = ["number", "indicator", "expression"];
+              const cur = order.indexOf(valueMode);
+              if (cur < 0) return;
+              const next =
+                e.key === "ArrowRight"
+                  ? order[(cur + 1) % order.length]
+                  : order[(cur - 1 + order.length) % order.length];
+              e.preventDefault();
+              handleModeChange(next);
+              requestAnimationFrame(() => {
+                const sel = (e.currentTarget as HTMLDivElement | null)?.querySelector<HTMLButtonElement>(
+                  `[data-tab-id="${next}"]`,
+                );
+                sel?.focus();
+              });
+            }}
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 1fr 1fr",
@@ -3656,7 +3674,10 @@ function ConditionDrawer({
                   key={tab.id}
                   type="button"
                   role="tab"
+                  data-tab-id={tab.id}
                   aria-selected={active}
+                  aria-controls={`compare-to-panel-${tab.id}`}
+                  tabIndex={active ? 0 : -1}
                   onClick={() => handleModeChange(tab.id)}
                   title={tab.hint}
                   style={{
@@ -3678,7 +3699,12 @@ function ConditionDrawer({
             })}
           </div>
 
-          <div style={{ marginTop: 10 }}>
+          <div
+            id={`compare-to-panel-${valueMode}`}
+            role="tabpanel"
+            aria-labelledby={`compare-to-tab-${valueMode}`}
+            style={{ marginTop: 10 }}
+          >
             {valueMode === "number" && (
               <NumberValueInput
                 value={expressionText}
