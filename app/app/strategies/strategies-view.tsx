@@ -87,8 +87,10 @@ function compare(a: Strategy, b: Strategy, key: SortKey, dir: SortDir): number {
 
 export function StrategiesView({
   initialStrategies,
+  fetchFailed = false,
 }: {
   initialStrategies: Strategy[];
+  fetchFailed?: boolean;
 }) {
   const [rows, setRows] = useState<Strategy[]>(initialStrategies);
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -111,6 +113,17 @@ export function StrategiesView({
       // Private mode / storage disabled — keep default (show modal).
     }
   }, []);
+
+  // Surface server-side fetch failure as a toast on mount so an empty list
+  // isn't misread as "no strategies yet" when it's actually a backend failure.
+  useEffect(() => {
+    if (fetchFailed) {
+      setImportMsg({
+        kind: "err",
+        text: "Couldn't load your strategies — showing partial data",
+      });
+    }
+  }, [fetchFailed]);
 
   // Status patch via PUT /api/strategies/{id}. Backend allows transitions
   // to ARCHIVED unconditionally (no actionable-rule check at routers/strategies.py:649),
@@ -175,14 +188,20 @@ export function StrategiesView({
       const parsed = JSON.parse(text);
       const list: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
       const imported: Strategy[] = list.map((raw, i) => coerceStrategy(raw, i));
-      const existingIds = new Set(rows.map((r) => r.id));
-      const fresh = imported.filter((r) => !existingIds.has(r.id));
-      const skipped = imported.length - fresh.length;
+      // Compute skipped/added inside the functional setRows updater so dedup
+      // reads against the current row set, not the closure's snapshot. Two
+      // imports fired back-to-back, or an archive between file selections,
+      // would otherwise produce a wrong "skipped N duplicates" toast.
+      let added = 0;
+      let skipped = 0;
       setRows((prev) => {
         const prevIds = new Set(prev.map((r) => r.id));
-        return [...imported.filter((r) => !prevIds.has(r.id)), ...prev];
+        const fresh = imported.filter((r) => !prevIds.has(r.id));
+        added = fresh.length;
+        skipped = imported.length - added;
+        return [...fresh, ...prev];
       });
-      const msg = skipped > 0 ? `imported ${fresh.length} · skipped ${skipped} duplicate` : `imported ${fresh.length}`;
+      const msg = skipped > 0 ? `imported ${added} · skipped ${skipped} duplicate` : `imported ${added}`;
       setImportMsg({ kind: "ok", text: msg });
     } catch (err) {
       setImportMsg({ kind: "err", text: err instanceof Error ? err.message : "invalid JSON" });
@@ -222,6 +241,8 @@ export function StrategiesView({
         }}
         onRestore={performRestore}
         restoreBusyId={restoreBusyId}
+        archiveBusy={archiveBusy}
+        archiveBusyId={archiveTarget?.id ?? null}
       />
       {archiveTarget && (
         <ArchiveConfirmModal
@@ -257,6 +278,8 @@ function ListBody({
   onArchive,
   onRestore,
   restoreBusyId,
+  archiveBusy,
+  archiveBusyId,
 }: {
   rows: Strategy[];
   status: StatusFilter;
@@ -269,6 +292,8 @@ function ListBody({
   onArchive: (s: Strategy) => void;
   onRestore: (s: Strategy) => void;
   restoreBusyId: string | null;
+  archiveBusy: boolean;
+  archiveBusyId: string | null;
 }) {
   const T = useT();
   const source = rows;
@@ -422,6 +447,8 @@ function ListBody({
           onArchive={onArchive}
           onRestore={onRestore}
           restoreBusyId={restoreBusyId}
+          archiveBusy={archiveBusy}
+          archiveBusyId={archiveBusyId}
         />
       )}
     </div>
@@ -439,6 +466,8 @@ function FilteredList({
   onArchive,
   onRestore,
   restoreBusyId,
+  archiveBusy,
+  archiveBusyId,
 }: {
   filters: { key: StatusFilter; label: string; count: number }[];
   status: StatusFilter;
@@ -450,6 +479,8 @@ function FilteredList({
   onArchive: (s: Strategy) => void;
   onRestore: (s: Strategy) => void;
   restoreBusyId: string | null;
+  archiveBusy: boolean;
+  archiveBusyId: string | null;
 }) {
   const T = useT();
   const { bp, isMobile } = useBreakpoint();
@@ -525,6 +556,8 @@ function FilteredList({
                 onArchive={onArchive}
                 onRestore={onRestore}
                 restoreBusyId={restoreBusyId}
+                archiveBusy={archiveBusy}
+                archiveBusyId={archiveBusyId}
               />
             )}
           </div>
@@ -786,11 +819,15 @@ function StrategyTable({
   onArchive,
   onRestore,
   restoreBusyId,
+  archiveBusy,
+  archiveBusyId,
 }: {
   rows: Strategy[];
   onArchive: (s: Strategy) => void;
   onRestore: (s: Strategy) => void;
   restoreBusyId: string | null;
+  archiveBusy: boolean;
+  archiveBusyId: string | null;
 }) {
   const T = useT();
   const cols: Col[] = [
@@ -931,7 +968,14 @@ function StrategyTable({
         if (ci === 8) {
           const s = cell as Strategy;
           const isArchived = s.status === "ARCHIVED";
-          const busy = isArchived && restoreBusyId === s.id;
+          // Show the busy indicator for whichever in-flight path applies to
+          // this row: restore (per-row id) or archive (modal target id +
+          // global archiveBusy). Previously only restore got feedback, so the
+          // user could click Archive again before the modal closed and have
+          // the row appear stuck/unresponsive.
+          const busy = isArchived
+            ? restoreBusyId === s.id
+            : archiveBusy && archiveBusyId === s.id;
           return (
             <Btn
               variant="ghost"
@@ -969,6 +1013,18 @@ function ArchiveConfirmModal({
 }) {
   const T = useT();
   const liveBots = strategy.botsCount > 0;
+  const titleId = "archive-confirm-title";
+  const cancelWrapRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    // Land focus on Cancel so keyboard users start inside the dialog at the
+    // non-destructive action. Escape also cancels (matches the backdrop click).
+    cancelWrapRef.current?.querySelector("button")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   return (
     <div
       onClick={onCancel}
@@ -984,6 +1040,9 @@ function ArchiveConfirmModal({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: T.surface,
@@ -996,6 +1055,7 @@ function ArchiveConfirmModal({
         }}
       >
         <h2
+          id={titleId}
           style={{
             margin: 0,
             fontFamily: T.fontHead,
@@ -1068,9 +1128,11 @@ function ArchiveConfirmModal({
             </label>
           )}
           <div style={{ display: "flex", gap: 10 }}>
-            <Btn variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-              Cancel
-            </Btn>
+            <span ref={cancelWrapRef} style={{ display: "inline-flex" }}>
+              <Btn variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+                Cancel
+              </Btn>
+            </span>
             <Btn variant="danger" size="sm" onClick={onConfirm} disabled={busy}>
               {busy ? "Archiving…" : "Archive"}
             </Btn>
@@ -1247,9 +1309,9 @@ function EmptyState({ onImport }: { onImport: () => void }) {
                   </div>
                   <div style={{ fontSize: 11.5, color: T.text3, marginTop: 3 }}>{p.desc}</div>
                 </div>
-                <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.primaryLight }}>
-                  use →
-                </span>
+                {/* No CTA — preset routing isn't wired yet. Cards read as
+                    informational pattern examples; "New strategy" above
+                    opens the blank editor for any of these. */}
               </div>
             ))}
           </div>

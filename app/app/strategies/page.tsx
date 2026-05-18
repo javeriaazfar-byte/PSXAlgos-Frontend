@@ -89,8 +89,16 @@ export default async function StrategiesPage() {
     email: session.user.email,
   });
 
-  const res = await getStrategies(jwt, { page: 1, page_size: 100 });
+  // Wrap the journal fetch so a transient Railway 5xx / Neon hiccup degrades
+  // to an empty list + flash toast on mount, instead of surfacing Next.js's
+  // global error boundary and wiping the page entirely. Pattern mirrors
+  // /portfolio + /bots + /signals.
+  let fetchFailed = false;
+  const res = await getStrategies(jwt, { page: 1, page_size: 100 }).catch(() => {
+    fetchFailed = true;
+    return { items: [], total: 0, page: 1, page_size: 0, total_pages: 0 };
+  });
   const initialStrategies = res.items.map(mapStrategy);
 
-  return <StrategiesView initialStrategies={initialStrategies} />;
+  return <StrategiesView initialStrategies={initialStrategies} fetchFailed={fetchFailed} />;
 }
