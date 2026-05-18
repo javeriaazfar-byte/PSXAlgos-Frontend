@@ -3162,6 +3162,122 @@ const FIELD_INFO = {
     "What the indicator on the left is compared against. Type a number (e.g. '30'), an indicator name (e.g. 'sma_20'), or an arithmetic expression mixing both (e.g. 'sma_20 + 5'). Suggestions appear as you type.",
 } as const;
 
+// SB-UX-REVAMP — plain-English labels used by the live condition summary at the
+// top of the drawer. Mirror OPERATOR_OPTIONS hints but trimmed for inline prose.
+const OPERATOR_PROSE: Record<Operator, string> = {
+  ">": "greater than",
+  ">=": "greater than or equal to",
+  "<": "less than",
+  "<=": "less than or equal to",
+  "==": "equal to",
+  crosses_above: "crosses above",
+  crosses_below: "crosses below",
+};
+
+// Short pill labels — the cryptic `×↑` / `×↓` glyphs are replaced with
+// readable words on the operator strip so a new user can read the choice
+// without hovering the tooltip.
+const OPERATOR_PILL: Record<Operator, string> = {
+  ">": ">",
+  ">=": "≥",
+  "<": "<",
+  "<=": "≤",
+  "==": "=",
+  crosses_above: "Crosses ↑",
+  crosses_below: "Crosses ↓",
+};
+
+const TIMEFRAME_PROSE: Record<Timeframe, string> = {
+  "5m": "5-minute",
+  "15m": "15-minute",
+  "30m": "30-minute",
+  "1h": "hourly",
+  "4h": "4-hour",
+  "1D": "daily",
+  "1W": "weekly",
+  "1M": "monthly",
+};
+
+// SB-UX-REVAMP — Right-hand-value input modes. `number` keeps it dead simple
+// for the 80% case (RSI < 30, Price > 100). `indicator` exposes a clean
+// dropdown for "Price > SMA(50)". `expression` is the existing power-user
+// editor with chips and the parser — only shown when explicitly switched on.
+type ValueMode = "number" | "indicator" | "expression";
+
+// Classifies the persisted `value_source` so we can land on the right input
+// mode when reopening an existing condition.
+function classifyValueMode(text: string, indicators: readonly string[]): ValueMode {
+  const t = text.trim();
+  if (!t) return "number";
+  if (/^-?\d+(\.\d+)?$/.test(t)) return "number";
+  if (indicators.includes(t)) return "indicator";
+  return "expression";
+}
+
+// SB-UX-REVAMP — one-click starter conditions for first-time users. Each
+// template fills LHS + operator + RHS in a single tap so a beginner doesn't
+// have to wire all four fields by hand. Only surfaced when the value is
+// empty (new condition or a freshly-cleared one).
+interface ConditionTemplate {
+  id: string;
+  label: string;
+  description: string;
+  indicator: string;
+  operator: Operator;
+  valueSource: string;
+}
+
+const CONDITION_TEMPLATES: readonly ConditionTemplate[] = [
+  {
+    id: "rsi-oversold",
+    label: "RSI oversold",
+    description: "RSI(14) < 30 — classic mean-reversion buy zone.",
+    indicator: "rsi",
+    operator: "<",
+    valueSource: "30",
+  },
+  {
+    id: "rsi-overbought",
+    label: "RSI overbought",
+    description: "RSI(14) > 70 — momentum exhaustion / sell zone.",
+    indicator: "rsi",
+    operator: ">",
+    valueSource: "70",
+  },
+  {
+    id: "price-above-50ma",
+    label: "Price above 50-day MA",
+    description: "Close > SMA(50) — uptrend filter.",
+    indicator: "close_price",
+    operator: ">",
+    valueSource: "sma_50",
+  },
+  {
+    id: "price-below-50ma",
+    label: "Price below 50-day MA",
+    description: "Close < SMA(50) — downtrend filter.",
+    indicator: "close_price",
+    operator: "<",
+    valueSource: "sma_50",
+  },
+  {
+    id: "golden-cross",
+    label: "Golden cross (50 over 200)",
+    description: "SMA(50) crosses above SMA(200) — classic long-term bull signal.",
+    indicator: "sma_50",
+    operator: "crosses_above",
+    valueSource: "sma_200",
+  },
+  {
+    id: "high-volume",
+    label: "Unusually high volume",
+    description: "Volume > volume_sma_20 — interest spike.",
+    indicator: "volume",
+    operator: ">",
+    valueSource: "volume_sma_20",
+  },
+];
+
 function DrawerContainer({ children }: { children: React.ReactNode }) {
   const T = useT();
   const { isMobile } = useBreakpoint();
@@ -3281,11 +3397,6 @@ function ConditionDrawer({
     return opts;
   }, [indicatorMeta]);
 
-  const period = getPeriodConfig(indicator);
-  const lhsLabel = formatIndicator(indicator, null);
-  const previewVal = expressionText.trim() || "—";
-  const previewOp = formatOp(op);
-
   // Wire list of indicator names for ExpressionInput's autocomplete. The
   // editor's `indicatorMeta` is grouped by category; the parser only needs
   // the flat name list (it already enforces the closed set via
@@ -3298,6 +3409,26 @@ function ConditionDrawer({
     }
     return out;
   }, [indicatorMeta]);
+
+  // SB-UX-REVAMP — pick the right input mode for the RHS based on the
+  // persisted expression. Empty / numeric → Number; bare indicator → Indicator;
+  // anything else → Expression (so existing complex conditions still open
+  // editable). User can switch tabs at any time without losing the text.
+  const [valueMode, setValueMode] = useState<ValueMode>(() =>
+    classifyValueMode(initialExpressionText, expressionIndicators),
+  );
+  // SB-UX-REVAMP — collapse advanced controls (timeframe, period, full LHS
+  // picker) behind a disclosure. Open by default when editing a condition
+  // whose LHS or timeframe differs from the new-condition defaults.
+  const [showMoreOptions, setShowMoreOptions] = useState<boolean>(
+    () =>
+      (cond.timeframe && cond.timeframe !== "1D") ||
+      !!getPeriodConfig(cond.indicator),
+  );
+
+  const period = getPeriodConfig(indicator);
+  const lhsLabel = formatIndicator(indicator, null);
+  const previewOpProse = OPERATOR_PROSE[op];
 
   const handleIndicatorChange = (next: string) => {
     setIndicator(next);
@@ -3334,9 +3465,51 @@ function ConditionDrawer({
     onApply(next);
   };
 
+  // SB-UX-REVAMP — Synchronously revalidate the persisted expression when the
+  // Number / Indicator inputs commit a value. The Expression-mode editor has
+  // its own debounced parser, so we leave it alone there.
+  const updateValueText = (next: string, mode: ValueMode) => {
+    setExpressionText(next);
+    setForceInvalid(false);
+    if (mode !== "expression") {
+      const r = parseForContext(next);
+      setExpressionOk(r.ok);
+    }
+  };
+
+  // SB-UX-REVAMP — Apply a one-click starter template. Fills indicator +
+  // operator + RHS in a single state batch so the user sees a complete
+  // working condition immediately. Timeframe stays as-is so the user's
+  // existing daily-vs-weekly pick is respected.
+  const applyTemplate = (tpl: ConditionTemplate) => {
+    setIndicator(tpl.indicator);
+    setOp(tpl.operator);
+    setExpressionText(tpl.valueSource);
+    setForceInvalid(false);
+    const nextMode = classifyValueMode(tpl.valueSource, expressionIndicators);
+    setValueMode(nextMode);
+    const r = parseForContext(tpl.valueSource);
+    setExpressionOk(r.ok);
+  };
+
+  // SB-UX-REVAMP — live English summary that replaces the big `RSI (14)` h2
+  // and the code subtitle. Trailing value falls back to "…" when empty so
+  // the sentence reads naturally even before the user types.
+  const summaryVerb = isExitRules ? "Exit when" : "Fire when";
+  const valueLabel = (() => {
+    const trimmed = expressionText.trim();
+    if (!trimmed) return "…";
+    // In Indicator mode the persisted wire name reads ugly inline; format it.
+    if (valueMode === "indicator" && expressionIndicators.includes(trimmed)) {
+      return formatIndicator(trimmed, null);
+    }
+    return trimmed;
+  })();
+
   return (
     <DrawerContainer>
-      <div style={{ padding: "18px 22px 0", position: "relative" }}>
+      {/* Header — kicker + live English summary replaces the redundant h2 */}
+      <div style={{ padding: "18px 22px 14px", position: "relative", borderBottom: `1px solid ${T.outlineFaint}` }}>
         <button
           type="button"
           onClick={onClose}
@@ -3360,25 +3533,177 @@ function ConditionDrawer({
           {Icon.close}
         </button>
         <Kicker color={T.primaryLight}>condition</Kicker>
-        <h2
+        <div
           style={{
+            marginTop: 10,
             fontFamily: T.fontHead,
-            fontSize: 22,
+            fontSize: 17,
             fontWeight: 500,
-            margin: "10px 0 4px",
-            letterSpacing: -0.4,
+            lineHeight: 1.45,
+            color: T.text,
+            letterSpacing: -0.2,
           }}
+          aria-live="polite"
         >
-          {displayName}
-        </h2>
-        <div style={{ fontFamily: T.fontMono, fontSize: 11, color: T.text3 }}>
-          {previewOp} {previewVal}
+          {summaryVerb}{" "}
+          <span style={{ color: T.primaryLight }}>{lhsLabel}</span>{" "}
+          on a <span style={{ color: T.primaryLight }}>{TIMEFRAME_PROSE[timeframe]}</span>{" "}
+          chart is <span style={{ color: T.primaryLight }}>{previewOpProse}</span>{" "}
+          <span style={{ color: T.primaryLight }}>{valueLabel}</span>.
         </div>
       </div>
 
       <div style={{ flex: 1, overflowX: "hidden", overflowY: "auto", padding: 22, paddingTop: 16 }}>
-        <div style={{ marginTop: 4 }}>
-          <Kicker info={FIELD_INFO.timeframe}>timeframe</Kicker>
+        {/* Templates — only on a fresh condition with nothing typed yet */}
+        {!expressionText.trim() && !isExitRules && (
+          <div style={{ marginBottom: 18 }}>
+            <Kicker>start from a template</Kicker>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                marginTop: 8,
+              }}
+            >
+              {CONDITION_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => applyTemplate(tpl)}
+                  title={tpl.description}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "none",
+                    cursor: "pointer",
+                    fontFamily: T.fontSans,
+                    fontSize: 12,
+                    textAlign: "left",
+                    background: T.surface,
+                    color: T.text2,
+                    boxShadow: `0 0 0 1px ${T.outlineFaint}`,
+                    transition: "background 140ms, color 140ms",
+                  }}
+                >
+                  {tpl.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: T.text3 }}>
+              Or fill in the fields below.
+            </div>
+          </div>
+        )}
+
+        {/* Compare against — the primary action. Three modes; the simple
+            Number input is the default so "RSI < 50" is one keystroke away. */}
+        <div>
+          <Kicker info={FIELD_INFO.comparedTo}>compare {lhsLabel} to</Kicker>
+          <div
+            role="tablist"
+            aria-label="Value input mode"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 4,
+              marginTop: 8,
+              padding: 3,
+              borderRadius: 8,
+              background: T.surfaceLow,
+              border: `1px solid ${T.outlineFaint}`,
+            }}
+          >
+            {(
+              [
+                { id: "number", label: "Number", hint: "e.g. 50" },
+                { id: "indicator", label: "Indicator", hint: "e.g. SMA (50)" },
+                { id: "expression", label: "Expression", hint: "advanced" },
+              ] as { id: ValueMode; label: string; hint: string }[]
+            ).map((tab) => {
+              const active = valueMode === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    setValueMode(tab.id);
+                    // Switching modes does NOT clear the text; the parser will
+                    // reject an inappropriate value and the inline error fires.
+                    // This lets the user widen Number→Expression without losing work.
+                  }}
+                  title={tab.hint}
+                  style={{
+                    padding: "8px 0",
+                    fontFamily: T.fontSans,
+                    fontSize: 12,
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    background: active ? T.surface2 : "transparent",
+                    color: active ? T.text : T.text3,
+                    boxShadow: active ? `0 0 0 1px ${T.outlineFaint}` : "none",
+                    transition: "background 140ms, color 140ms",
+                  }}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            {valueMode === "number" && (
+              <NumberValueInput
+                value={expressionText}
+                onChange={(next) => updateValueText(next, "number")}
+                invalid={forceInvalid || (!!expressionText.trim() && !expressionOk)}
+              />
+            )}
+            {valueMode === "indicator" && (
+              <Combobox
+                label=""
+                value={
+                  expressionIndicators.includes(expressionText.trim())
+                    ? formatIndicator(expressionText.trim(), null)
+                    : expressionText
+                }
+                onChange={(v) => {
+                  // Map label → wire name where possible; pass typed text through.
+                  const match = indicatorOptions.find(
+                    (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
+                  );
+                  updateValueText(match ? match.value : v, "indicator");
+                }}
+                options={indicatorOptions}
+                mono
+                placeholder="Pick an indicator…"
+                emptyHint="No matching indicator"
+              />
+            )}
+            {valueMode === "expression" && (
+              <ExpressionInput
+                value={expressionText}
+                onChange={(next) => {
+                  setExpressionText(next);
+                  setForceInvalid(false);
+                }}
+                onParse={(result) => setExpressionOk(result.ok)}
+                indicators={expressionIndicators}
+                formatIndicatorLabel={(wire) => formatIndicator(wire, null)}
+                ariaLabel="Condition value expression"
+                forceInvalid={forceInvalid}
+                isExitRules={isExitRules}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Operator — the comparison verb */}
+        <div style={{ marginTop: 18 }}>
+          <Kicker info={FIELD_INFO.operator}>operator</Kicker>
           <div
             style={{
               display: "flex",
@@ -3387,124 +3712,9 @@ function ConditionDrawer({
               marginTop: 8,
             }}
           >
-            {TIMEFRAMES.map((tf) => {
-              const active = timeframe === tf.value;
-              const locked = !tf.available;
-              const tip = locked
-                ? `${tf.label} timeframe — coming soon. We're backfilling intraday history; daily (1D) is the only timeframe evaluated today.`
-                : undefined;
-              return (
-                <button
-                  key={tf.value}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => {
-                    if (!locked) setTimeframe(tf.value);
-                  }}
-                  title={tip}
-                  aria-label={
-                    locked ? `${tf.label} timeframe (coming soon, locked)` : `${tf.label} timeframe`
-                  }
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "6px 12px",
-                    borderRadius: 999,
-                    fontSize: 12,
-                    border: "none",
-                    cursor: locked ? "not-allowed" : "pointer",
-                    fontFamily: T.fontMono,
-                    fontVariantNumeric: "tabular-nums",
-                    background: active ? T.primary + "22" : T.surface,
-                    color: active ? T.primaryLight : locked ? T.text3 : T.text2,
-                    opacity: locked ? 0.55 : 1,
-                    boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
-                    transition: "background 140ms, color 140ms",
-                  }}
-                >
-                  {tf.label}
-                  {locked && (
-                    <span style={{ display: "inline-flex", marginLeft: 1, color: T.text3 }}>
-                      {Icon.lock}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ marginTop: 18 }}>
-          <Combobox
-            label="indicator"
-            info={FIELD_INFO.indicator}
-            value={lhsLabel}
-            onChange={(v) => {
-              // Combobox commits the option's `value` (wire format), but
-              // free-typed text comes through verbatim. Map back to the
-              // wire format if the typed text matches a known label.
-              const match = indicatorOptions.find(
-                (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
-              );
-              handleIndicatorChange(match ? match.value : v);
-            }}
-            options={indicatorOptions}
-            mono
-            placeholder="Pick an indicator…"
-            emptyHint="No matching indicator"
-          />
-        </div>
-
-        {period && (
-          <div style={{ marginTop: 14 }}>
-            <Kicker info={FIELD_INFO.period}>period</Kicker>
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              {period.choices.map((p) => {
-                const active = p === period.current;
-                const locked = period.family === "rsi";
-                return (
-                  <button
-                    key={p}
-                    type="button"
-                    disabled={locked}
-                    onClick={() => handlePeriodChange(p)}
-                    title={locked ? "RSI period is fixed at 14" : undefined}
-                    style={{
-                      padding: "6px 14px",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      border: "none",
-                      cursor: locked ? "default" : "pointer",
-                      opacity: locked ? 0.7 : 1,
-                      fontFamily: T.fontMono,
-                      fontVariantNumeric: "tabular-nums",
-                      background: active ? T.primary + "22" : T.surface,
-                      color: active ? T.primaryLight : T.text3,
-                      boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
-                      transition: "background 140ms, color 140ms",
-                    }}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 18 }}>
-          <Kicker info={FIELD_INFO.operator}>operator</Kicker>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gap: 6,
-              marginTop: 8,
-            }}
-          >
             {OPERATOR_OPTIONS.map((o) => {
               const active = op === o.value;
+              const pillLabel = OPERATOR_PILL[o.value];
               return (
                 <button
                   key={o.value}
@@ -3512,13 +3722,14 @@ function ConditionDrawer({
                   onClick={() => setOp(o.value)}
                   title={o.hint}
                   style={{
-                    padding: "8px 0",
+                    padding: "6px 12px",
+                    minWidth: 44,
                     textAlign: "center",
-                    borderRadius: 6,
+                    borderRadius: 999,
                     border: "none",
                     cursor: "pointer",
-                    fontFamily: T.fontMono,
-                    fontSize: 13,
+                    fontFamily: T.fontSans,
+                    fontSize: 12,
                     background: active ? T.primary + "22" : T.surface,
                     color: active ? T.primaryLight : T.text2,
                     boxShadow: active
@@ -3527,34 +3738,146 @@ function ConditionDrawer({
                     transition: "background 140ms, color 140ms, box-shadow 140ms",
                   }}
                 >
-                  {o.label}
+                  {pillLabel}
                 </button>
               );
             })}
           </div>
         </div>
 
+        {/* Indicator — the LHS. Compact, no full Combobox label.
+            We render this AFTER the value because most users won't change it
+            (defaults to RSI or whatever was clicked), but it has to stay
+            accessible for the case where they do. */}
         <div style={{ marginTop: 18 }}>
-          <Kicker info={FIELD_INFO.comparedTo}>compared to</Kicker>
-          {/* SB1: single free-form expression field replaces the legacy
-              Constant / Indicator segmented control. Parses client-side for
-              instant feedback; backend re-validates on save. Spec:
-              docs/design_call_dossiers/SB1_frontend_expression_editor_2026-05-15.md */}
+          <Kicker info={FIELD_INFO.indicator}>indicator (what to watch)</Kicker>
           <div style={{ marginTop: 8 }}>
-            <ExpressionInput
-              value={expressionText}
-              onChange={(next) => {
-                setExpressionText(next);
-                setForceInvalid(false);
+            <Combobox
+              label=""
+              value={lhsLabel}
+              onChange={(v) => {
+                const match = indicatorOptions.find(
+                  (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
+                );
+                handleIndicatorChange(match ? match.value : v);
               }}
-              onParse={(result) => setExpressionOk(result.ok)}
-              indicators={expressionIndicators}
-              formatIndicatorLabel={(wire) => formatIndicator(wire, null)}
-              ariaLabel="Condition value expression"
-              forceInvalid={forceInvalid}
-              isExitRules={isExitRules}
+              options={indicatorOptions}
+              mono
+              placeholder="Pick an indicator…"
+              emptyHint="No matching indicator"
             />
           </div>
+        </div>
+
+        {/* More options — timeframe + period live here so the default surface
+            stays focused on the 80% case. Open automatically when the user
+            arrives at a condition that already has a non-default timeframe
+            or a parametric indicator. */}
+        <div style={{ marginTop: 18 }}>
+          <button
+            type="button"
+            onClick={() => setShowMoreOptions((v) => !v)}
+            aria-expanded={showMoreOptions}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              fontFamily: T.fontSans,
+              fontSize: 12,
+              color: T.text2,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <span aria-hidden style={{ display: "inline-block", width: 10 }}>
+              {showMoreOptions ? "▾" : "▸"}
+            </span>
+            More options (timeframe{period ? ", period" : ""})
+          </button>
+
+          {showMoreOptions && (
+            <div style={{ marginTop: 12 }}>
+              <Kicker info={FIELD_INFO.timeframe}>timeframe</Kicker>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {TIMEFRAMES.filter((tf) => tf.available).map((tf) => {
+                  const active = timeframe === tf.value;
+                  return (
+                    <button
+                      key={tf.value}
+                      type="button"
+                      onClick={() => setTimeframe(tf.value)}
+                      aria-label={`${tf.label} timeframe`}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        border: "none",
+                        cursor: "pointer",
+                        fontFamily: T.fontMono,
+                        fontVariantNumeric: "tabular-nums",
+                        background: active ? T.primary + "22" : T.surface,
+                        color: active ? T.primaryLight : T.text2,
+                        boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
+                        transition: "background 140ms, color 140ms",
+                      }}
+                    >
+                      {tf.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 11,
+                  color: T.text3,
+                  fontFamily: T.fontSans,
+                }}
+              >
+                Intraday timeframes (5m–4h) are coming soon — we&apos;re
+                backfilling history.
+              </div>
+
+              {period && (
+                <div style={{ marginTop: 14 }}>
+                  <Kicker info={FIELD_INFO.period}>period</Kicker>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {period.choices.map((p) => {
+                      const active = p === period.current;
+                      const locked = period.family === "rsi";
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          disabled={locked}
+                          onClick={() => handlePeriodChange(p)}
+                          title={locked ? "RSI period is fixed at 14" : undefined}
+                          style={{
+                            padding: "6px 14px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            border: "none",
+                            cursor: locked ? "default" : "pointer",
+                            opacity: locked ? 0.7 : 1,
+                            fontFamily: T.fontMono,
+                            fontVariantNumeric: "tabular-nums",
+                            background: active ? T.primary + "22" : T.surface,
+                            color: active ? T.primaryLight : T.text3,
+                            boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
+                            transition: "background 140ms, color 140ms",
+                          }}
+                        >
+                          {p}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -3587,6 +3910,50 @@ function ConditionDrawer({
         </Btn>
       </div>
     </DrawerContainer>
+  );
+}
+
+// SB-UX-REVAMP — bare numeric input used by the RHS "Number" tab. We keep it
+// `type="text"` with `inputMode="decimal"` so we get the mobile decimal
+// keypad without losing the ability to type a leading `-` on desktop. The
+// parser already accepts integers, decimals, and negatives.
+function NumberValueInput({
+  value,
+  onChange,
+  invalid,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  invalid: boolean;
+}) {
+  const T = useT();
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="e.g. 50"
+      aria-label="Numeric value to compare against"
+      aria-invalid={invalid}
+      autoComplete="off"
+      autoCorrect="off"
+      spellCheck={false}
+      style={{
+        width: "100%",
+        padding: "10px 12px",
+        fontFamily: T.fontMono,
+        fontSize: 14,
+        fontVariantNumeric: "tabular-nums",
+        background: T.surface,
+        color: T.text,
+        border: "none",
+        borderRadius: 8,
+        outline: "none",
+        boxShadow: `0 0 0 ${invalid ? 1.5 : 1}px ${invalid ? T.loss : T.outlineFaint}`,
+        transition: "box-shadow 120ms",
+      }}
+    />
   );
 }
 
