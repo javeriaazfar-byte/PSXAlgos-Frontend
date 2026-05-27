@@ -74,6 +74,19 @@ export default function LandingContent() {
               flexWrap: "wrap",
             }}
           >
+            <span
+              style={{
+                padding: "2px 8px",
+                borderRadius: 999,
+                background: T.primary,
+                color: T.surface,
+                fontWeight: 600,
+                fontSize: 10,
+                letterSpacing: 0.8,
+              }}
+            >
+              BETA
+            </span>
             <span style={{ width: 20, height: 1, background: T.primaryLight }} />
             Built for the PSX · Karachi, Lahore, Islamabad
           </div>
@@ -129,7 +142,7 @@ export default function LandingContent() {
                 color: T.surface,
               }}
             >
-              Start free →
+              Try it →
             </Link>
             <button
               type="button"
@@ -159,9 +172,9 @@ export default function LandingContent() {
               flexWrap: "wrap",
             }}
           >
-            <span>✓ Free tier</span>
-            <span>✓ No card needed</span>
-            <span>✓ PKR pricing</span>
+            <span>✓ Built for PSX</span>
+            <span>✓ 10 years of data</span>
+            <span>✓ Sign in with Google</span>
           </div>
         </div>
 
@@ -579,7 +592,7 @@ export default function LandingContent() {
             color: T.surface,
           }}
         >
-          Start free →
+          Try it →
         </Link>
       </div>
 
