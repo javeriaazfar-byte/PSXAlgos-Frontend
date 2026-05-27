@@ -573,11 +573,11 @@ export default function LandingContent() {
             lineHeight: 1.05,
           }}
         >
-          Your first strategy is{" "}
-          <span style={{ fontStyle: "italic", color: T.primaryLight }}>free</span>.
+          Build your first strategy in{" "}
+          <span style={{ fontStyle: "italic", color: T.primaryLight }}>minutes</span>.
         </h2>
         <p style={{ fontSize: 14.5, color: T.text2, marginTop: 14, marginBottom: 28 }}>
-          No credit card. 10 strategies, 1 year of history, 3 backtests — on the house.
+          No code, no broker setup. Sign in with Google, pick a template, hit backtest.
         </p>
         <Link
           href="/strategies"
