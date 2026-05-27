@@ -443,7 +443,17 @@ export function TerminalTable<R>({
         }}
       >
         {cols.map((c, i) => (
-          <div key={i} style={{ textAlign: c.align || "left", padding: "0 12px" }}>
+          <div
+            key={i}
+            style={{
+              textAlign: c.align || "left",
+              padding: "0 12px",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
             {c.label}
           </div>
         ))}
@@ -493,20 +503,36 @@ export function TerminalTable<R>({
                 : undefined
             }
           >
-            {row.map((cell, ci) => (
-              <div
-                key={ci}
-                style={{
-                  textAlign: cols[ci].align || "left",
-                  padding: "0 12px",
-                  fontVariantNumeric: "tabular-nums",
-                  fontFamily: cols[ci].mono === false ? T.fontSans : T.fontMono,
-                  whiteSpace: cols[ci].wrap ? "normal" : "nowrap",
-                }}
-              >
-                {renderCell ? renderCell(cell, ci, ri, cols[ci]) : (cell as unknown as ReactNode)}
-              </div>
-            ))}
+            {row.map((cell, ci) => {
+              const wrap = cols[ci].wrap;
+              // String cells get a native tooltip with the full value so
+              // clipped content (ellipsis) stays discoverable. Non-string
+              // cells (objects passed through to renderCell — kebab state,
+              // OpenPosition, etc.) are skipped to avoid `[object Object]`
+              // in the title attribute.
+              const titleAttr =
+                typeof cell === "string" || typeof cell === "number"
+                  ? String(cell)
+                  : undefined;
+              return (
+                <div
+                  key={ci}
+                  title={titleAttr}
+                  style={{
+                    textAlign: cols[ci].align || "left",
+                    padding: "0 12px",
+                    fontVariantNumeric: "tabular-nums",
+                    fontFamily: cols[ci].mono === false ? T.fontSans : T.fontMono,
+                    whiteSpace: wrap ? "normal" : "nowrap",
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: wrap ? "clip" : "ellipsis",
+                  }}
+                >
+                  {renderCell ? renderCell(cell, ci, ri, cols[ci]) : (cell as unknown as ReactNode)}
+                </div>
+              );
+            })}
           </div>
         );
       })}

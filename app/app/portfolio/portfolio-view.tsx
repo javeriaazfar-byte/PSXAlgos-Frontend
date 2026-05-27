@@ -1208,7 +1208,7 @@ function OpenPositionsTable({
                     cursor: "pointer",
                     color: T.text,
                     fontSize: 16,
-                    padding: "0 8px",
+                    padding: "0 4px",
                   }}
                 >
                   ⋮
@@ -1286,7 +1286,7 @@ function OpenPositionsTable({
                 cursor: "pointer",
                 color: T.text3,
                 fontSize: 16,
-                padding: "0 8px",
+                padding: "0 4px",
               }}
             >
               ⋮
@@ -1482,7 +1482,7 @@ function ClosedTable({
                     cursor: "pointer",
                     color: T.text,
                     fontSize: 16,
-                    padding: "0 8px",
+                    padding: "0 4px",
                   }}
                 >
                   ⋮
@@ -1538,7 +1538,7 @@ function ClosedTable({
                 cursor: "pointer",
                 color: T.text3,
                 fontSize: 16,
-                padding: "0 8px",
+                padding: "0 4px",
               }}
             >
               ⋮

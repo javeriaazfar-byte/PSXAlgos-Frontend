@@ -3337,6 +3337,53 @@ function withPeriod(indicator: string, period: number): string {
   return indicator;
 }
 
+// Token Sentence Builder — pill button that anchors a popover. Used by
+// ConditionDrawer to make LHS / operator / RHS each a self-contained
+// interactive token in the "Fire when [X] [op] [Y]." sentence.
+function TokenPill({
+  label,
+  onClick,
+  ariaLabel,
+  isOpen,
+}: {
+  label: React.ReactNode;
+  onClick: () => void;
+  ariaLabel: string;
+  isOpen: boolean;
+}) {
+  const T = useT();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-expanded={isOpen}
+      aria-label={ariaLabel}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "8px 14px",
+        borderRadius: 999,
+        border: "none",
+        cursor: "pointer",
+        fontFamily: T.fontMono,
+        fontSize: 13,
+        background: isOpen ? (T.primary + "22") : T.surface,
+        color: isOpen ? T.primaryLight : T.text,
+        boxShadow: isOpen
+          ? `0 0 0 1.5px ${T.primary}`
+          : `0 0 0 1px ${T.outlineFaint}`,
+        transition: "background 140ms, color 140ms, box-shadow 140ms",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+      <span aria-hidden style={{ fontSize: 10, opacity: 0.7, marginLeft: 1 }}>▾</span>
+    </button>
+  );
+}
+
 // Controlled ConditionDrawer — reads `cond` (the live SingleCondition from
 // EditorView state), seeds local form state on mount, calls `onApply` with
 // the next SingleCondition when the user hits Save. PR-2 wires the LHS
@@ -3385,10 +3432,6 @@ function ConditionDrawer({
     return r.ok;
   });
   const [forceInvalid, setForceInvalid] = useState<boolean>(false);
-  // Templates panel is opt-in chrome: shown by default on a fresh condition,
-  // but dismissable so users who want to author custom logic aren't forced to
-  // scroll past the chip pile every time they edit a condition.
-  const [templatesDismissed, setTemplatesDismissed] = useState<boolean>(false);
   // Bar resolution. Backend defaults absent values to "1D"; if a legacy
   // condition was saved before the field existed we surface "1D" so the
   // chip row reflects the live evaluation behavior.
@@ -3431,18 +3474,8 @@ function ConditionDrawer({
   const [valueMode, setValueMode] = useState<ValueMode>(() =>
     classifyValueMode(initialExpressionText, expressionIndicators),
   );
-  // SB-UX-REVAMP — collapse advanced controls (timeframe, period, full LHS
-  // picker) behind a disclosure. Open by default when editing a condition
-  // whose LHS or timeframe differs from the new-condition defaults.
-  const [showMoreOptions, setShowMoreOptions] = useState<boolean>(
-    () =>
-      (cond.timeframe && cond.timeframe !== "1D") ||
-      !!getPeriodConfig(cond.indicator),
-  );
-
   const period = getPeriodConfig(indicator);
   const lhsLabel = formatIndicator(indicator, null);
-  const previewOpProse = OPERATOR_PROSE[op];
 
   const handleIndicatorChange = (next: string) => {
     setIndicator(next);
@@ -3527,40 +3560,195 @@ function ConditionDrawer({
     setValueMode(nextMode);
     const r = parseForContext(tpl.valueSource);
     setExpressionOk(r.ok);
-    // Auto-open More Options when the template's indicator is parametric
-    // (e.g. SMA / RSI period) — the disclosure exposes the period picker
-    // the user will likely need to tweak. Mirrors the mount-time initializer.
-    if (getPeriodConfig(tpl.indicator)) setShowMoreOptions(true);
   };
 
   // SB-UX-REVAMP — live English summary that replaces the big `RSI (14)` h2
   // and the code subtitle. Trailing value falls back to "…" when empty so
   // the sentence reads naturally even before the user types.
   const summaryVerb = isExitRules ? "Exit when" : "Fire when";
-  const valueLabel = (() => {
+  // Token Sentence Builder — RHS pill label derived from current value mode
+  // and expression text. Falls back to "…" so the sentence always reads.
+  const rhsPillLabel = (() => {
     const trimmed = expressionText.trim();
     if (!trimmed) return "…";
-    // In Indicator mode the persisted wire name reads ugly inline; format it.
     if (valueMode === "indicator" && expressionIndicators.includes(trimmed)) {
       return formatIndicator(trimmed, null);
     }
-    // Cap long expressions so a stray paste doesn't overrun the header.
-    if (trimmed.length > 40) return trimmed.slice(0, 40) + "…";
+    if (valueMode === "expression") {
+      if (!trimmed) return "expression";
+      return trimmed.length > 32 ? trimmed.slice(0, 32) + "…" : trimmed;
+    }
     return trimmed;
   })();
 
+  // Token Sentence Builder — LHS pill label: "RSI · 14 · 1D", "SMA · 50 · 1W",
+  // "MACD · 1D", etc. lhsLabel from formatIndicator already includes the period
+  // in parens (e.g. "RSI (14)", "SMA (50)") — we reformat to "·" separators.
+  const lhsPillLabel = (() => {
+    // e.g. "RSI (14)" → "RSI · 14 · 1D"
+    //      "SMA (50)" → "SMA · 50 · 1W"
+    //      "MACD"     → "MACD · 1D"
+    const periodMatch = lhsLabel.match(/^(.+?)\s+\((\d+)\)$/);
+    if (periodMatch) {
+      return `${periodMatch[1]} · ${periodMatch[2]} · ${timeframe}`;
+    }
+    return `${lhsLabel} · ${timeframe}`;
+  })();
+
+  // Token Sentence Builder — which popover is open. null = all closed.
+  type PopoverKey = "lhs" | "op" | "rhs" | "templates" | null;
+  const [openPopover, setOpenPopover] = useState<PopoverKey>(null);
+
+  // Refs for each pill wrapper div — used for outside-click detection.
+  const lhsWrapRef = useRef<HTMLDivElement>(null);
+  const opWrapRef = useRef<HTMLDivElement>(null);
+  const rhsWrapRef = useRef<HTMLDivElement>(null);
+  const templatesWrapRef = useRef<HTMLDivElement>(null);
+
+  // Close popover on outside click or Escape.
+  useEffect(() => {
+    if (!openPopover) return;
+    const refs: Record<string, React.RefObject<HTMLDivElement | null>> = {
+      lhs: lhsWrapRef,
+      op: opWrapRef,
+      rhs: rhsWrapRef,
+      templates: templatesWrapRef,
+    };
+    const activeRef = refs[openPopover];
+    const handleMouseDown = (e: MouseEvent) => {
+      if (activeRef?.current && !activeRef.current.contains(e.target as Node)) {
+        setOpenPopover(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenPopover(null);
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openPopover]);
+
+  // Token Sentence Builder — operator tab grouping for the two-tab op popover.
+  const COMPARE_OPS: Operator[] = [">", ">=", "<", "<=", "=="];
+  const CROSS_OPS: Operator[] = ["crosses_above", "crosses_below"];
+  const [localOpTab, setLocalOpTab] = useState<"compare" | "cross">(
+    COMPARE_OPS.includes(op) ? "compare" : "cross",
+  );
+  // Sync localOpTab when op changes from outside (e.g. template applied).
+  useEffect(() => {
+    setLocalOpTab(COMPARE_OPS.includes(op) ? "compare" : "cross");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [op]);
+
+  // Popover shared style helper — keeps the inline style objects DRY.
+  const { isMobile } = useBreakpoint();
+  const popoverStyle: React.CSSProperties = {
+    position: "absolute",
+    top: "calc(100% + 6px)",
+    left: 0,
+    zIndex: 10,
+    minWidth: isMobile ? undefined : 280,
+    maxWidth: isMobile ? undefined : 360,
+    width: isMobile ? "100%" : undefined,
+    background: T.surface2 ?? T.surface,
+    boxShadow: `0 0 0 1px ${T.outlineFaint}, 0 8px 24px rgba(0,0,0,0.18)`,
+    borderRadius: 10,
+    padding: 14,
+  };
+
   return (
     <DrawerContainer>
-      {/* Header — kicker + live English summary replaces the redundant h2 */}
-      <div style={{ padding: "18px 22px 14px", position: "relative", borderBottom: `1px solid ${T.outlineFaint}` }}>
+      {/* ── Header strip: CONDITION kicker · [Templates ▾] · [×] ── */}
+      <div
+        style={{
+          padding: "14px 16px 14px 20px",
+          borderBottom: `1px solid ${T.outlineFaint}`,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ flex: 1 }}>
+          <Kicker color={T.primaryLight}>condition</Kicker>
+        </span>
+
+        {/* Templates dropdown — only when blank + not exit rules */}
+        {!expressionText.trim() && !isExitRules && (
+          <div ref={templatesWrapRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setOpenPopover(openPopover === "templates" ? null : "templates")}
+              aria-haspopup="dialog"
+              aria-expanded={openPopover === "templates"}
+              aria-label="Pick a condition template"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "5px 10px",
+                borderRadius: 6,
+                border: `1px solid ${T.outlineFaint}`,
+                background: openPopover === "templates" ? (T.primary + "22") : "transparent",
+                color: openPopover === "templates" ? T.primaryLight : T.text2,
+                fontFamily: T.fontSans,
+                fontSize: 12,
+                cursor: "pointer",
+                transition: "background 140ms, color 140ms",
+              }}
+            >
+              Templates
+              <span aria-hidden style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
+            </button>
+            {openPopover === "templates" && (
+              <div
+                role="dialog"
+                aria-modal="false"
+                aria-label="Condition templates"
+                style={{ ...popoverStyle, minWidth: 220 }}
+              >
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {CONDITION_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => { applyTemplate(tpl); setOpenPopover(null); }}
+                      title={tpl.description}
+                      style={{
+                        padding: "7px 11px",
+                        borderRadius: 8,
+                        border: "none",
+                        cursor: "pointer",
+                        fontFamily: T.fontSans,
+                        fontSize: 12,
+                        textAlign: "left",
+                        background: T.surface,
+                        color: T.text2,
+                        boxShadow: `0 0 0 1px ${T.outlineFaint}`,
+                        transition: "background 140ms, color 140ms",
+                      }}
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: T.text3 }}>
+                  Or fill in the fields below.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Close button */}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close drawer"
           style={{
-            position: "absolute",
-            top: 10,
-            right: 10,
             width: 28,
             height: 28,
             display: "inline-flex",
@@ -3571,439 +3759,439 @@ function ConditionDrawer({
             borderRadius: 6,
             color: T.text3,
             cursor: "pointer",
+            flexShrink: 0,
           }}
         >
           {Icon.close}
         </button>
-        <Kicker color={T.primaryLight}>condition</Kicker>
-        <div
-          style={{
-            marginTop: 10,
-            fontFamily: T.fontHead,
-            fontSize: 17,
-            fontWeight: 500,
-            lineHeight: 1.45,
-            color: T.text,
-            letterSpacing: -0.2,
-          }}
-          aria-live="polite"
-        >
-          {summaryVerb}{" "}
-          <span style={{ color: T.primaryLight }}>{lhsLabel}</span>{" "}
-          on a <span style={{ color: T.primaryLight }}>{TIMEFRAME_PROSE[timeframe]}</span>{" "}
-          chart is <span style={{ color: T.primaryLight }}>{previewOpProse}</span>{" "}
-          <span style={{ color: T.primaryLight }}>{valueLabel}</span>.
-        </div>
       </div>
 
-      <div style={{ flex: 1, overflowX: "hidden", overflowY: "auto", padding: 22, paddingTop: 16 }}>
-        {/* Templates — only on a fresh condition with nothing typed yet.
-            Shown expanded by default and dismissable; once dismissed the
-            user can re-open via the "Browse templates" pill. */}
-        {!expressionText.trim() && !isExitRules && !templatesDismissed && (
-          <div style={{ marginBottom: 18 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <Kicker>start from a template</Kicker>
-              <button
-                type="button"
-                onClick={() => setTemplatesDismissed(true)}
-                aria-label="Hide templates"
-                title="Hide templates"
-                style={{
-                  width: 22,
-                  height: 22,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: 6,
-                  color: T.text3,
-                  cursor: "pointer",
-                  fontSize: 14,
-                  lineHeight: 1,
-                }}
-              >
-                ×
-              </button>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 6,
-                marginTop: 8,
-              }}
-            >
-              {CONDITION_TEMPLATES.map((tpl) => (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => applyTemplate(tpl)}
-                  title={tpl.description}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    border: "none",
-                    cursor: "pointer",
-                    fontFamily: T.fontSans,
-                    fontSize: 12,
-                    textAlign: "left",
-                    background: T.surface,
-                    color: T.text2,
-                    boxShadow: `0 0 0 1px ${T.outlineFaint}`,
-                    transition: "background 140ms, color 140ms",
-                  }}
-                >
-                  {tpl.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ marginTop: 8, fontSize: 11, color: T.text3 }}>
-              Or fill in the fields below.
-            </div>
-          </div>
-        )}
+      {/* ── Body: "Fire when [LHS ▾] [op ▾] [RHS ▾] ." ── */}
+      <div style={{ flex: 1, overflowX: "hidden", overflowY: "auto", padding: "20px 20px 16px" }}>
 
-        {/* Re-open affordance when templates were dismissed but the user
-            still has a blank condition. Stays out of the way once they
-            start authoring. */}
-        {!expressionText.trim() && !isExitRules && templatesDismissed && (
-          <div style={{ marginBottom: 14 }}>
-            <button
-              type="button"
-              onClick={() => setTemplatesDismissed(false)}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 999,
-                border: `1px solid ${T.outlineFaint}`,
-                background: "transparent",
-                color: T.text3,
-                fontFamily: T.fontMono,
-                fontSize: 10,
-                letterSpacing: 0.4,
-                textTransform: "uppercase",
-                cursor: "pointer",
-              }}
-            >
-              Browse templates
-            </button>
-          </div>
-        )}
-
-        {/* Compare against — the primary action. Three modes; the simple
-            Number input is the default so "RSI < 50" is one keystroke away. */}
-        <div>
-          <Kicker info={FIELD_INFO.comparedTo}>compare {lhsLabel} to</Kicker>
-          <div
-            role="tablist"
-            aria-label="Value input mode"
-            onKeyDown={(e) => {
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-              const order: ValueMode[] = ["number", "indicator", "expression"];
-              const cur = order.indexOf(valueMode);
-              if (cur < 0) return;
-              const next =
-                e.key === "ArrowRight"
-                  ? order[(cur + 1) % order.length]
-                  : order[(cur - 1 + order.length) % order.length];
-              e.preventDefault();
-              handleModeChange(next);
-              requestAnimationFrame(() => {
-                const sel = (e.currentTarget as HTMLDivElement | null)?.querySelector<HTMLButtonElement>(
-                  `[data-tab-id="${next}"]`,
-                );
-                sel?.focus();
-              });
-            }}
+        {/* Prose line + token pills — the sentence-as-form */}
+        <div
+          aria-live="polite"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+            rowGap: 8,
+          }}
+        >
+          {/* "Fire when" / "Exit when" prose prefix */}
+          <span
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 4,
-              marginTop: 8,
-              padding: 3,
-              borderRadius: 8,
-              background: T.surfaceLow,
-              border: `1px solid ${T.outlineFaint}`,
-            }}
-          >
-            {(
-              [
-                { id: "number", label: "Number", hint: "e.g. 50" },
-                { id: "indicator", label: "Indicator", hint: "e.g. SMA (50)" },
-                { id: "expression", label: "Expression", hint: "advanced" },
-              ] as { id: ValueMode; label: string; hint: string }[]
-            ).map((tab) => {
-              const active = valueMode === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  data-tab-id={tab.id}
-                  aria-selected={active}
-                  aria-controls={`compare-to-panel-${tab.id}`}
-                  tabIndex={active ? 0 : -1}
-                  onClick={() => handleModeChange(tab.id)}
-                  title={tab.hint}
-                  style={{
-                    padding: "8px 0",
-                    fontFamily: T.fontSans,
-                    fontSize: 12,
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    background: active ? T.surface2 : "transparent",
-                    color: active ? T.text : T.text3,
-                    boxShadow: active ? `0 0 0 1px ${T.outlineFaint}` : "none",
-                    transition: "background 140ms, color 140ms",
-                  }}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div
-            id={`compare-to-panel-${valueMode}`}
-            role="tabpanel"
-            aria-labelledby={`compare-to-tab-${valueMode}`}
-            style={{ marginTop: 10 }}
-          >
-            {valueMode === "number" && (
-              <NumberValueInput
-                value={expressionText}
-                onChange={(next) => updateValueText(next, "number")}
-                invalid={forceInvalid || (!!expressionText.trim() && !expressionOk)}
-              />
-            )}
-            {valueMode === "indicator" && (
-              <Combobox
-                label=""
-                value={
-                  expressionIndicators.includes(expressionText.trim())
-                    ? formatIndicator(expressionText.trim(), null)
-                    : expressionText
-                }
-                onChange={(v) => {
-                  // Map label → wire name where possible; pass typed text through.
-                  const match = indicatorOptions.find(
-                    (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
-                  );
-                  updateValueText(match ? match.value : v, "indicator");
-                }}
-                options={indicatorOptions}
-                mono
-                placeholder="Pick an indicator…"
-                emptyHint="No matching indicator"
-              />
-            )}
-            {valueMode === "expression" && (
-              <ExpressionInput
-                value={expressionText}
-                onChange={(next) => {
-                  setExpressionText(next);
-                  setForceInvalid(false);
-                }}
-                onParse={(result) => setExpressionOk(result.ok)}
-                indicators={expressionIndicators}
-                formatIndicatorLabel={(wire) => formatIndicator(wire, null)}
-                ariaLabel="Condition value expression"
-                forceInvalid={forceInvalid}
-                isExitRules={isExitRules}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Operator — the comparison verb */}
-        <div style={{ marginTop: 18 }}>
-          <Kicker info={FIELD_INFO.operator}>operator</Kicker>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 6,
-              marginTop: 8,
-            }}
-          >
-            {OPERATOR_OPTIONS.map((o) => {
-              const active = op === o.value;
-              const pillLabel = OPERATOR_PILL[o.value];
-              return (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => setOp(o.value)}
-                  title={o.hint}
-                  style={{
-                    padding: "6px 12px",
-                    minWidth: 44,
-                    textAlign: "center",
-                    borderRadius: 999,
-                    border: "none",
-                    cursor: "pointer",
-                    fontFamily: T.fontSans,
-                    fontSize: 12,
-                    background: active ? T.primary + "22" : T.surface,
-                    color: active ? T.primaryLight : T.text2,
-                    boxShadow: active
-                      ? `0 0 0 1.5px ${T.primary}`
-                      : `0 0 0 1px ${T.outlineFaint}`,
-                    transition: "background 140ms, color 140ms, box-shadow 140ms",
-                  }}
-                >
-                  {pillLabel}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Indicator — the LHS. Compact, no full Combobox label.
-            We render this AFTER the value because most users won't change it
-            (defaults to RSI or whatever was clicked), but it has to stay
-            accessible for the case where they do. */}
-        <div style={{ marginTop: 18 }}>
-          <Kicker info={FIELD_INFO.indicator}>indicator (what to watch)</Kicker>
-          <div style={{ marginTop: 8 }}>
-            <Combobox
-              label=""
-              value={lhsLabel}
-              onChange={(v) => {
-                const match = indicatorOptions.find(
-                  (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
-                );
-                handleIndicatorChange(match ? match.value : v);
-              }}
-              options={indicatorOptions}
-              mono
-              placeholder="Pick an indicator…"
-              emptyHint="No matching indicator"
-            />
-          </div>
-        </div>
-
-        {/* More options — timeframe + period live here so the default surface
-            stays focused on the 80% case. Open automatically when the user
-            arrives at a condition that already has a non-default timeframe
-            or a parametric indicator. */}
-        <div style={{ marginTop: 18 }}>
-          <button
-            type="button"
-            onClick={() => setShowMoreOptions((v) => !v)}
-            aria-expanded={showMoreOptions}
-            style={{
-              background: "transparent",
-              border: "none",
-              padding: 0,
-              cursor: "pointer",
               fontFamily: T.fontSans,
-              fontSize: 12,
-              color: T.text2,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
+              fontSize: 13,
+              color: T.text3,
+              whiteSpace: "nowrap",
             }}
           >
-            <span aria-hidden style={{ display: "inline-block", width: 10 }}>
-              {showMoreOptions ? "▾" : "▸"}
-            </span>
-            More options (timeframe{period ? ", period" : ""})
-          </button>
+            {summaryVerb}
+          </span>
 
-          {showMoreOptions && (
-            <div style={{ marginTop: 12 }}>
-              <Kicker info={FIELD_INFO.timeframe}>timeframe</Kicker>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                {TIMEFRAMES.filter((tf) => tf.available).map((tf) => {
-                  const active = timeframe === tf.value;
-                  return (
-                    <button
-                      key={tf.value}
-                      type="button"
-                      onClick={() => setTimeframe(tf.value)}
-                      aria-label={`${tf.label} timeframe`}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: 999,
-                        fontSize: 12,
-                        border: "none",
-                        cursor: "pointer",
-                        fontFamily: T.fontMono,
-                        fontVariantNumeric: "tabular-nums",
-                        background: active ? T.primary + "22" : T.surface,
-                        color: active ? T.primaryLight : T.text2,
-                        boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
-                        transition: "background 140ms, color 140ms",
-                      }}
-                    >
-                      {tf.label}
-                    </button>
-                  );
-                })}
-              </div>
+          {/* Token 1 — LHS indicator */}
+          <div ref={lhsWrapRef} style={{ position: "relative" }}>
+            <TokenPill
+              label={lhsPillLabel}
+              onClick={() => setOpenPopover(openPopover === "lhs" ? null : "lhs")}
+              ariaLabel="Edit indicator"
+              isOpen={openPopover === "lhs"}
+            />
+            {openPopover === "lhs" && (
               <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 11,
-                  color: T.text3,
-                  fontFamily: T.fontSans,
-                }}
+                role="dialog"
+                aria-modal="false"
+                aria-label="Indicator settings"
+                style={popoverStyle}
               >
-                Intraday timeframes (5m–4h) are coming soon — we&apos;re
-                backfilling history.
-              </div>
+                {/* Indicator picker */}
+                <Kicker info={FIELD_INFO.indicator}>indicator</Kicker>
+                <div style={{ marginTop: 8 }}>
+                  <Combobox
+                    label=""
+                    value={lhsLabel}
+                    onChange={(v) => {
+                      const match = indicatorOptions.find(
+                        (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
+                      );
+                      handleIndicatorChange(match ? match.value : v);
+                    }}
+                    options={indicatorOptions}
+                    mono
+                    placeholder="Pick an indicator…"
+                    emptyHint="No matching indicator"
+                  />
+                </div>
 
-              {period && (
+                {/* Period — only for parametric indicators */}
+                {period && (
+                  <div style={{ marginTop: 14 }}>
+                    <Kicker info={FIELD_INFO.period}>period</Kicker>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      {period.choices.map((p) => {
+                        const active = p === period.current;
+                        const locked = period.family === "rsi";
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            disabled={locked}
+                            onClick={() => handlePeriodChange(p)}
+                            title={locked ? "RSI period is fixed at 14" : undefined}
+                            style={{
+                              padding: "6px 14px",
+                              borderRadius: 999,
+                              fontSize: 12,
+                              border: "none",
+                              cursor: locked ? "default" : "pointer",
+                              opacity: locked ? 0.7 : 1,
+                              fontFamily: T.fontMono,
+                              fontVariantNumeric: "tabular-nums",
+                              background: active ? T.primary + "22" : T.surface,
+                              color: active ? T.primaryLight : T.text3,
+                              boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
+                              transition: "background 140ms, color 140ms",
+                            }}
+                          >
+                            {p}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Timeframe */}
                 <div style={{ marginTop: 14 }}>
-                  <Kicker info={FIELD_INFO.period}>period</Kicker>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                    {period.choices.map((p) => {
-                      const active = p === period.current;
-                      const locked = period.family === "rsi";
+                  <Kicker info={FIELD_INFO.timeframe}>timeframe</Kicker>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                    {TIMEFRAMES.filter((tf) => tf.available).map((tf) => {
+                      const active = timeframe === tf.value;
                       return (
                         <button
-                          key={p}
+                          key={tf.value}
                           type="button"
-                          disabled={locked}
-                          onClick={() => handlePeriodChange(p)}
-                          title={locked ? "RSI period is fixed at 14" : undefined}
+                          onClick={() => setTimeframe(tf.value)}
+                          aria-label={`${tf.label} timeframe`}
                           style={{
-                            padding: "6px 14px",
+                            padding: "6px 12px",
                             borderRadius: 999,
                             fontSize: 12,
                             border: "none",
-                            cursor: locked ? "default" : "pointer",
-                            opacity: locked ? 0.7 : 1,
+                            cursor: "pointer",
                             fontFamily: T.fontMono,
                             fontVariantNumeric: "tabular-nums",
                             background: active ? T.primary + "22" : T.surface,
-                            color: active ? T.primaryLight : T.text3,
+                            color: active ? T.primaryLight : T.text2,
                             boxShadow: `0 0 0 1px ${active ? T.primary : T.outlineFaint}`,
                             transition: "background 140ms, color 140ms",
                           }}
                         >
-                          {p}
+                          {tf.label}
                         </button>
                       );
                     })}
                   </div>
+                  <div style={{ marginTop: 6, fontSize: 11, color: T.text3, fontFamily: T.fontSans }}>
+                    Intraday timeframes (5m–4h) are coming soon — we&apos;re
+                    backfilling history.
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
+
+          {/* Token 2 — Operator */}
+          <div ref={opWrapRef} style={{ position: "relative" }}>
+            <TokenPill
+              label={OPERATOR_PILL[op]}
+              onClick={() => setOpenPopover(openPopover === "op" ? null : "op")}
+              ariaLabel="Edit operator"
+              isOpen={openPopover === "op"}
+            />
+            {openPopover === "op" && (
+              <div
+                role="dialog"
+                aria-modal="false"
+                aria-label="Operator picker"
+                style={{ ...popoverStyle, minWidth: 260 }}
+              >
+                {/* Two-tab strip: Compare | Cross */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 4,
+                    padding: 3,
+                    borderRadius: 8,
+                    background: T.surfaceLow,
+                    border: `1px solid ${T.outlineFaint}`,
+                    marginBottom: 12,
+                  }}
+                >
+                  {(["compare", "cross"] as const).map((tab) => {
+                    const active = localOpTab === tab;
+                    return (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setLocalOpTab(tab)}
+                        style={{
+                          padding: "7px 0",
+                          fontFamily: T.fontSans,
+                          fontSize: 12,
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: active ? T.surface2 : "transparent",
+                          color: active ? T.text : T.text3,
+                          boxShadow: active ? `0 0 0 1px ${T.outlineFaint}` : "none",
+                          transition: "background 140ms, color 140ms",
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {tab === "compare" ? "Compare" : "Cross"}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Compare operators */}
+                {localOpTab === "compare" && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {COMPARE_OPS.map((o) => {
+                      const active = op === o;
+                      return (
+                        <button
+                          key={o}
+                          type="button"
+                          onClick={() => { setOp(o); setOpenPopover(null); }}
+                          title={OPERATOR_OPTIONS.find((opt) => opt.value === o)?.hint}
+                          style={{
+                            padding: "6px 14px",
+                            minWidth: 40,
+                            textAlign: "center",
+                            borderRadius: 999,
+                            border: "none",
+                            cursor: "pointer",
+                            fontFamily: T.fontMono,
+                            fontSize: 13,
+                            background: active ? T.primary + "22" : T.surface,
+                            color: active ? T.primaryLight : T.text2,
+                            boxShadow: active
+                              ? `0 0 0 1.5px ${T.primary}`
+                              : `0 0 0 1px ${T.outlineFaint}`,
+                            transition: "background 140ms, color 140ms, box-shadow 140ms",
+                          }}
+                        >
+                          {OPERATOR_PILL[o]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Cross operators */}
+                {localOpTab === "cross" && (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {CROSS_OPS.map((o) => {
+                      const active = op === o;
+                      return (
+                        <button
+                          key={o}
+                          type="button"
+                          onClick={() => { setOp(o); setOpenPopover(null); }}
+                          title={OPERATOR_OPTIONS.find((opt) => opt.value === o)?.hint}
+                          style={{
+                            padding: "6px 14px",
+                            borderRadius: 999,
+                            border: "none",
+                            cursor: "pointer",
+                            fontFamily: T.fontSans,
+                            fontSize: 12,
+                            background: active ? T.primary + "22" : T.surface,
+                            color: active ? T.primaryLight : T.text2,
+                            boxShadow: active
+                              ? `0 0 0 1.5px ${T.primary}`
+                              : `0 0 0 1px ${T.outlineFaint}`,
+                            transition: "background 140ms, color 140ms, box-shadow 140ms",
+                          }}
+                        >
+                          {OPERATOR_PILL[o]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Token 3 — RHS value */}
+          <div ref={rhsWrapRef} style={{ position: "relative" }}>
+            <TokenPill
+              label={rhsPillLabel}
+              onClick={() => setOpenPopover(openPopover === "rhs" ? null : "rhs")}
+              ariaLabel="Edit comparison value"
+              isOpen={openPopover === "rhs"}
+            />
+            {openPopover === "rhs" && (
+              <div
+                role="dialog"
+                aria-modal="false"
+                aria-label="Comparison value"
+                style={popoverStyle}
+              >
+                {/* Three-tab strip: Number | Indicator | Expression */}
+                <div
+                  role="tablist"
+                  aria-label="Value input mode"
+                  onKeyDown={(e) => {
+                    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                    const order: ValueMode[] = ["number", "indicator", "expression"];
+                    const cur = order.indexOf(valueMode);
+                    if (cur < 0) return;
+                    const next =
+                      e.key === "ArrowRight"
+                        ? order[(cur + 1) % order.length]
+                        : order[(cur - 1 + order.length) % order.length];
+                    e.preventDefault();
+                    handleModeChange(next);
+                    requestAnimationFrame(() => {
+                      const sel = (e.currentTarget as HTMLDivElement | null)?.querySelector<HTMLButtonElement>(
+                        `[data-tab-id="${next}"]`,
+                      );
+                      sel?.focus();
+                    });
+                  }}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: 4,
+                    padding: 3,
+                    borderRadius: 8,
+                    background: T.surfaceLow,
+                    border: `1px solid ${T.outlineFaint}`,
+                    marginBottom: 10,
+                  }}
+                >
+                  {(
+                    [
+                      { id: "number", label: "Number", hint: "e.g. 50" },
+                      { id: "indicator", label: "Indicator", hint: "e.g. SMA (50)" },
+                      { id: "expression", label: "Expression", hint: "advanced" },
+                    ] as { id: ValueMode; label: string; hint: string }[]
+                  ).map((tab) => {
+                    const active = valueMode === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        data-tab-id={tab.id}
+                        aria-selected={active}
+                        aria-controls={`compare-to-panel-${tab.id}`}
+                        tabIndex={active ? 0 : -1}
+                        onClick={() => handleModeChange(tab.id)}
+                        title={tab.hint}
+                        style={{
+                          padding: "7px 0",
+                          fontFamily: T.fontSans,
+                          fontSize: 12,
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: active ? T.surface2 : "transparent",
+                          color: active ? T.text : T.text3,
+                          boxShadow: active ? `0 0 0 1px ${T.outlineFaint}` : "none",
+                          transition: "background 140ms, color 140ms",
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div
+                  id={`compare-to-panel-${valueMode}`}
+                  role="tabpanel"
+                  aria-labelledby={`compare-to-tab-${valueMode}`}
+                >
+                  {valueMode === "number" && (
+                    <NumberValueInput
+                      value={expressionText}
+                      onChange={(next) => updateValueText(next, "number")}
+                      invalid={forceInvalid || (!!expressionText.trim() && !expressionOk)}
+                    />
+                  )}
+                  {valueMode === "indicator" && (
+                    <Combobox
+                      label=""
+                      value={
+                        expressionIndicators.includes(expressionText.trim())
+                          ? formatIndicator(expressionText.trim(), null)
+                          : expressionText
+                      }
+                      onChange={(v) => {
+                        // Map label → wire name where possible; pass typed text through.
+                        const match = indicatorOptions.find(
+                          (o) => o.label.toLowerCase() === v.toLowerCase() || o.value === v,
+                        );
+                        updateValueText(match ? match.value : v, "indicator");
+                      }}
+                      options={indicatorOptions}
+                      mono
+                      placeholder="Pick an indicator…"
+                      emptyHint="No matching indicator"
+                    />
+                  )}
+                  {valueMode === "expression" && (
+                    <ExpressionInput
+                      value={expressionText}
+                      onChange={(next) => {
+                        setExpressionText(next);
+                        setForceInvalid(false);
+                      }}
+                      onParse={(result) => setExpressionOk(result.ok)}
+                      indicators={expressionIndicators}
+                      formatIndicatorLabel={(wire) => formatIndicator(wire, null)}
+                      ariaLabel="Condition value expression"
+                      forceInvalid={forceInvalid}
+                      isExitRules={isExitRules}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Trailing period to complete the sentence visually */}
+          <span
+            aria-hidden
+            style={{ fontFamily: T.fontSans, fontSize: 13, color: T.text3 }}
+          >
+            .
+          </span>
+        </div>
+
+        {/* Helper line below the token row */}
+        <div
+          style={{
+            marginTop: 18,
+            fontSize: 11,
+            color: T.text3,
+            fontFamily: T.fontSans,
+          }}
+        >
+          Click any pill to edit. Press Apply when you&apos;re done.
         </div>
       </div>
 
+      {/* ── Footer: Delete · spacer · Duplicate · Apply ── */}
       <div
         style={{
           padding: 14,

@@ -1,6 +1,11 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+
+// useLayoutEffect on the server logs a warning even though it's a no-op there.
+// In SSR builds we fall back to useEffect to silence it. The body of the effect
+// below is client-only by construction (reads document) so the distinction is safe.
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export type Mode = "light" | "dark";
 
@@ -117,14 +122,26 @@ function osPrefersDark(): boolean {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setModeState] = useState<Mode>(() => {
-    if (typeof window === "undefined") return "light";
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === "light" || saved === "dark") return saved;
-    } catch {}
-    return osPrefersDark() ? "dark" : "light";
-  });
+  // Initialise to "light" so the SSR output and the first client render match —
+  // any other initial value would cause a hydration mismatch for inline-styled
+  // components reading useT() (e.g. the Sign in button), leaving them stuck on
+  // the server-rendered theme until something else triggered a re-render.
+  // The themeInit script in app/layout.tsx has already written the correct
+  // `data-theme` attribute to <html> from localStorage / OS preference before
+  // React hydrates, so we sync React state to that attribute below via a
+  // layout effect — runs synchronously before the first paint, so CSS-var
+  // surfaces (background, borders) and inline-token surfaces (button bg, text
+  // color) land on the same theme in the first visible frame.
+  const [mode, setModeState] = useState<Mode>("light");
+
+  useIsomorphicLayoutEffect(() => {
+    const attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "dark" || attr === "light") {
+      setModeState(attr);
+      return;
+    }
+    if (osPrefersDark()) setModeState("dark");
+  }, []);
 
   useEffect(() => {
     // Set data-theme on <html>; globals.css reads this via [data-theme="dark"]
