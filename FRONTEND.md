@@ -70,6 +70,21 @@ useBacktestChartSeries(strategyId: number | null, backtestId: number | null)
 - `chartData` is `BacktestChartSeriesResponse | null`
 - Exports the three interfaces for BE↔FE schema parity — import from this file, not redefined elsewhere
 
+### `watchBacktestJob(strategyId, jobId)` — `app/lib/api/backtest-watcher.ts`
+
+One-shot promise that resolves when a background backtest reaches a terminal state. Used by `app/backtest/new/backtest-new-view.tsx` after `POST /api/strategies/{id}/backtest?async_mode=true`.
+
+```ts
+watchBacktestJob(stratId: number, jobId: string): Promise<BacktestJobStatus>
+```
+
+Hybrid path:
+- **WebSocket (primary):** fetches `/api/auth/ws-token`, opens `ws(s)://…/ws?token=…`, listens for `{type:"job_update", job_kind:"backtest", job_id, status}`. Resolves on `completed` or `failed`.
+- **Slow poll (safety net):** parallel `GET /api/strategies/{id}/backtest/job/{jobId}` every 5s, 60 attempts (5-min budget), 4-strikes tolerance for transient 5xx / network errors. 4xx aborts immediately.
+- Whichever resolves first wins; the loser is aborted via shared `AbortController`. WS is always closed in `finally`.
+
+This replaces the old in-component `pollJob()` (1.5s × 30 attempts = 45s budget) which couldn't survive 10yr × all-stocks backtests.
+
 ---
 
 ## Component Architecture
@@ -211,6 +226,19 @@ All routes in `app/app/api/` forward to the Railway backend with the NextAuth se
 ---
 
 ## BFF Routes Reference
+
+### `GET /api/auth/ws-token` — `app/app/api/auth/ws-token/route.ts`
+
+Mints a short-lived backend JWT (5 min, HS256, audience `authenticated`) for opening a browser WebSocket to FastAPI's `/ws` endpoint. The browser can't read NextAuth's secret, so the token is signed server-side off the active session via `signBackendJwt` (`app/lib/api/jwt.ts`).
+
+**Responses:**
+- `200 { token, ws_url, expires_in }` — `ws_url` is derived from `NEXT_PUBLIC_API_BASE_URL` by stripping `/api/v1` and converting `http(s)` → `ws(s)`.
+- `401 { error: "unauthorized" }` — no session.
+- `500 { error }` — `NEXTAUTH_SECRET` or `NEXT_PUBLIC_API_BASE_URL` missing.
+
+`Cache-Control: no-store` — tokens are single-use per session start.
+
+Consumers: `lib/api/backtest-watcher.ts::watchBacktestJob`.
 
 ### `POST /api/contact` — `app/app/api/contact/route.ts`
 
