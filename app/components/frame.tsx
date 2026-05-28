@@ -417,7 +417,7 @@ export function MarketingNav({ badge }: { badge?: string }) {
         <div style={{ flex: 1 }} />
 
         <div style={{ display: "flex", gap: compact ? 6 : 10, alignItems: "center" }}>
-          <ThemeToggle variant="inline" />
+          <ThemeToggle variant="inline" iconOnly={compact} />
           {!compact && (
             <Link
               href="/contact"
@@ -875,7 +875,10 @@ function BottomTabBar({ route }: { route?: string }) {
   );
 }
 
-export function ThemeToggle({ variant = "floating" }: { variant?: "floating" | "inline" } = {}) {
+export function ThemeToggle({
+  variant = "floating",
+  iconOnly = false,
+}: { variant?: "floating" | "inline"; iconOnly?: boolean } = {}) {
   const T = useT();
   const { mode, setMode } = useTheme();
   const darkBg = mode === "dark";
@@ -914,15 +917,16 @@ export function ThemeToggle({ variant = "floating" }: { variant?: "floating" | "
     <div style={containerStyle}>
       {(
         [
-          ["light", "☀ Paper"],
-          ["dark", "◐ Amber"],
+          ["light", "☀", "Paper"],
+          ["dark", "◐", "Amber"],
         ] as const
-      ).map(([m, label]) => {
+      ).map(([m, icon, name]) => {
         const active = mode === m;
+        const label = iconOnly ? icon : `${icon} ${name}`;
         const buttonStyle = inline
           ? {
               minHeight: 24,
-              padding: "6px 12px",
+              padding: iconOnly ? "6px 9px" : "6px 12px",
               borderRadius: 999,
               border: "none",
               background: active ? T.surface : "transparent",
@@ -953,7 +957,14 @@ export function ThemeToggle({ variant = "floating" }: { variant?: "floating" | "
               fontWeight: 600,
             };
         return (
-          <button key={m} type="button" onClick={() => setMode(m)} style={buttonStyle}>
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            style={buttonStyle}
+            aria-label={iconOnly ? `Switch to ${name}` : undefined}
+            title={iconOnly ? name : undefined}
+          >
             {label}
           </button>
         );
