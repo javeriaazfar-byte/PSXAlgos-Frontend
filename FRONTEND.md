@@ -1,7 +1,7 @@
 # PSX UI — Frontend
 
 > FastAPI backend → Next.js 15 frontend. Active repo; `psx-trading-view/` is legacy.
-> Last updated: 2026-05-18 (alerts + watchlists + market UI removed; backends kept dormant)
+> Last updated: 2026-05-28 (new `/contact` page + `/api/contact` form route via Resend; Feedback button added across MarketingNav / TopNav / MobileDrawer)
 
 ---
 
@@ -11,6 +11,7 @@
 app/
 ├── app/                   # Next.js App Router pages + API proxy routes
 │   ├── api/               # Proxy routes (forward auth headers to Railway backend)
+│   │   ├── contact/route.ts                       # POST → Resend (sends form to support@)
 │   │   └── strategies/
 │   │       ├── [id]/
 │   │       │   └── backtests/
@@ -19,6 +20,7 @@ app/
 │   │       └── route.ts
 │   ├── backtest/          # /backtests/[id] — result page, chart, trade log
 │   ├── bots/              # /bots — bot management
+│   ├── contact/           # /contact — feedback form + direct channels
 │   ├── leaderboard/
 │   ├── portfolio/
 │   ├── pricing/
@@ -113,6 +115,21 @@ Allows callers to supply a per-row background color. Used by `backtest-view.tsx`
 
 ## Pages Reference
 
+### `/contact` — `app/app/contact/page.tsx`
+
+Public feedback page. Renders in-page form + a fallback list of direct channels. No auth required.
+
+**Form** (top of page): `name`, `email`, `subject` (optional), `message`. Submits to `POST /api/contact` (see BFF Routes Reference). Inline `Status` state machine (`idle` / `sending` / `success` / `error`) renders the result next to the submit button. On success the form clears; on error the form preserves the user's input and shows a recovery hint pointing at `support@psxalgos.com` directly.
+
+**Honeypot**: hidden `website` input inside an `aria-hidden`, off-screen wrapper (`position: absolute; left: -10000px`) with `tabIndex={-1}`. Bots fill every input they see; humans never reach it. The API silently drops any request where `website` is non-empty (returns 200 so bots don't escalate).
+
+**Direct channels** (below the form, labelled "── or reach me directly"):
+- `support@psxalgos.com` — product help / bugs / feedback. Primary mailto.
+- `info@psxalgos.com` — general / partnerships / press. Secondary mailto.
+- `https://wa.me/923342153065` — WhatsApp link (not `tel:`). PK convention; opens in new tab.
+
+Phone number is deliberately gated behind `/contact` (one click) rather than exposed on the landing footer to keep scrapers off it.
+
 ### `/backtests/[id]` — `app/app/backtest/backtest-view.tsx`
 
 Backtest result detail page. Shows verdict, performance charts, trade economics, and trade log.
@@ -194,5 +211,44 @@ All routes in `app/app/api/` forward to the Railway backend with the NextAuth se
 ---
 
 ## BFF Routes Reference
+
+### `POST /api/contact` — `app/app/api/contact/route.ts`
+
+Public contact-form sender. Does NOT forward to the Railway backend — sends email directly via Resend.
+
+**Body (JSON):**
+```ts
+{
+  name: string;        // required, 1–100
+  email: string;       // required, RFC 5322 subset, 1–200
+  subject?: string;    // optional, 0–200
+  message: string;     // required, 10–5000
+  website?: string;    // honeypot — must be empty
+}
+```
+
+**Responses:**
+- `200 { ok: true }` — accepted by Resend (or silently dropped honeypot hit)
+- `400 { error }` — validation failure (name/email/message missing or out of bounds)
+- `502 { error }` — Resend rejected or threw; visitor sees a hint to email `support@` directly
+- `503 { error }` — `RESEND_API_KEY` not configured on the server
+
+**Env vars (Vercel — set on both Production and Preview):**
+- `RESEND_API_KEY` *(required)* — from resend.com dashboard. Starts with `re_`.
+- `CONTACT_FROM` *(optional)* — sender. Default `PSX Algos <onboarding@resend.dev>` (Resend's sandbox, only delivers to the account email). Production value: `PSX Algos <noreply@psxalgos.com>` once the domain is verified in Resend.
+- `CONTACT_TO` *(optional)* — recipient. Default `support@psxalgos.com`.
+
+**Behaviour notes:**
+- `replyTo` is set to the submitter's email so when the maintainer hits "Reply" in Zoho, the message threads back to the visitor instead of the noreply mailbox.
+- HTML body is constructed with manual escaping (`escapeHtml`) — never inject form input into the HTML template unsanitised.
+- Resend errors are logged server-side (`console.error("[contact] ...")`) but never leaked to the client — visitors always see a generic recoverable message.
+- Honeypot returns 200 (not 4xx) so bots don't escalate to a more aggressive strategy.
+
+**DNS / mail-routing context (Resend + Zoho coexist):**
+- Resend uses the `send.psxalgos.com` subdomain for bounce handling — separate from the root MX (which Zoho owns for `support@`, `info@`, `basim@` inboxes).
+- DKIM/SPF/DMARC records added via Cloudflare auto-configure.
+- **Do not enable Resend's "Enable Receiving"** — it would overwrite Zoho's root MX and break all inbound mail.
+
+---
 
 > **Removed 2026-05-18:** `/alerts`, `/watchlists`, and `/market` pages plus their BFF routes (`api/alerts/*`, `api/watchlist/*`, `api/market/*`), hooks (`use-alerts.ts`, `use-watchlists.ts`, `use-market.ts`), and clients (`lib/api/alerts.ts`, `lib/api/watchlists.ts`, `lib/api/market.ts`) were deleted from psx-ui. Backend routers (`backend/app/routers/alerts.py`, `backend/app/routers/watchlists.py`, `backend/app/routers/market.py`) and their DB tables remain live but unreachable from the deployed UI — cheap to revive if any surface returns. Decisions: alerts collapse into strategies (user expresses any rule as a strategy and deploys it); watchlists deprioritised to keep nav focused on the signal → strategy → bot loop; market overview page deferred — KSE-100 headline already lives in the global top bar.
