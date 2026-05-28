@@ -29,7 +29,7 @@ const CHANNELS: ReadonlyArray<{
     label: "Phone (Pakistan business hours)",
     value: "+92 334 2153065",
     href: "tel:+923342153065",
-    meta: "Reachable 10am–7pm PKT. Text or WhatsApp work too.",
+    meta: "Text or WhatsApp work too.",
     for: "phone",
   },
 ];
