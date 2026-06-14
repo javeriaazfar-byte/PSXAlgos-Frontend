@@ -104,8 +104,8 @@ export default async function Home() {
   }
 
   const jwt = signBackendJwt({
-    sub: session.user.id,
-    email: session.user.email,
+    sub: session.user.id ?? "",
+    email: session.user.email ?? "",
   });
 
   // Fetch all dashboard data in parallel; degrade gracefully on any failure

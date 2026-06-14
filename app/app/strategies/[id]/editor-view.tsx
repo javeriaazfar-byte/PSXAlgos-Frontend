@@ -3009,7 +3009,6 @@ function InsertSlot({
             flexDirection: showHint ? "column" : "row",
             alignItems: "center",
             justifyContent: "center",
-            padding: 0,
             gap: showHint ? 5 : 4,
             transition: "border-color 120ms ease, background 120ms ease",
           }}
