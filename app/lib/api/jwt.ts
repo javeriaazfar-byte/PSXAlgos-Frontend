@@ -33,9 +33,9 @@ export function signBackendJwt(
   payload: BackendJwtPayload,
   expiresInSec = 3600,
 ): string {
-  const secret = process.env.NEXTAUTH_SECRET
+  const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET
   if (!secret) {
-    throw new Error("NEXTAUTH_SECRET is not set — cannot mint backend JWT")
+    throw new Error("AUTH_SECRET is not set — cannot mint backend JWT")
   }
   const header = { alg: "HS256", typ: "JWT" }
   const now = Math.floor(Date.now() / 1000)
