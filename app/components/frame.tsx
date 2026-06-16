@@ -28,6 +28,7 @@ const NAV_ITEMS: MarketingItem[] = [
   { kind: "link", href: "/bots", label: "Bots" },
   { kind: "link", href: "/portfolio", label: "Portfolio" },
   { kind: "link", href: "/leaderboard", label: "Leaderboard" },
+  { kind: "link", href: "/learn", label: "Learn" },
 ];
 
 type BottomTab = { href: string; label: string; icon: ReactNode };

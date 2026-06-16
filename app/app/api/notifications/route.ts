@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { signBackendJwt } from "@/lib/api/jwt";
-import { ApiError } from "@/lib/api/client";
 import { listNotifications, type ListParams } from "@/lib/api/notifications";
+
+const EMPTY = { items: [], next_cursor: null, unread_count: 0 } as const;
 
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(EMPTY);
   }
   const url = new URL(req.url);
   const params: ListParams = {};
@@ -27,13 +28,9 @@ export async function GET(req: Request) {
   });
   try {
     return NextResponse.json(await listNotifications(jwt, params));
-  } catch (err) {
-    if (err instanceof ApiError) {
-      return NextResponse.json(
-        { error: err.message, detail: err.body },
-        { status: err.status },
-      );
-    }
-    return NextResponse.json({ error: "server error" }, { status: 500 });
+  } catch {
+    // Non-critical chrome — degrade to an empty list rather than surfacing a
+    // backend/auth error to the drawer (and the dev error overlay).
+    return NextResponse.json(EMPTY);
   }
 }

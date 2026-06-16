@@ -177,6 +177,11 @@ function Populated({ bots }: { bots: Bot[] }) {
   const T = useT();
   const { bp } = useBreakpoint();
   const padX = pick(bp, PAD.page);
+  // Shrink the big stat numbers on phones so "PKR 9.00M" fits on one line
+  // (was wrapping at 40px) and the summary block takes less vertical space —
+  // less scrolling. Scales with viewport so it fits even on narrow (320px)
+  // phones; tablet/desktop keep the original fixed 40px.
+  const ledeSize = pick(bp, { mobile: clampPx(20, 6.5, 30), desktop: "40px" });
   // Lede card values — all derived from the actual bots list. Previously
   // hardcoded with example numbers that survived the scaffold.
   const totalEquity = bots.reduce((s, b) => s + b.equity, 0);
@@ -227,7 +232,7 @@ function Populated({ bots }: { bots: Bot[] }) {
             tablet: "repeat(2, 1fr)",
             desktop: "repeat(4, 1fr)",
           }),
-          gap: pick(bp, { mobile: 20, desktop: 36 }),
+          gap: pick(bp, { mobile: "16px 20px", desktop: "36px" }),
           paddingBottom: 24,
           borderBottom: `1px solid ${T.outlineFaint}`,
         }}
@@ -236,23 +241,27 @@ function Populated({ bots }: { bots: Bot[] }) {
           label="Total equity"
           value={`PKR ${(totalEquity / 1_000_000).toFixed(2)}M`}
           sub={`across ${bots.length} bot${bots.length === 1 ? "" : "s"}`}
+          size={ledeSize}
         />
         <Lede
           label="Combined P&L"
           value={`${combinedPct >= 0 ? "+" : ""}${combinedPct.toFixed(2)}%`}
           color={combinedPct >= 0 ? T.gain : T.loss}
           sub={`${combinedAbs >= 0 ? "+" : ""}PKR ${Math.round(combinedAbs).toLocaleString()}`}
+          size={ledeSize}
         />
         <Lede
           label="Today"
           value={`${todayTotal >= 0 ? "+" : ""}PKR ${todayTotal.toLocaleString()}`}
           color={todayTotal >= 0 ? T.gain : T.loss}
           sub="unrealized"
+          size={ledeSize}
         />
         <Lede
           label="Open positions"
           value={String(openTotal)}
           sub={openTotal === 0 ? "no live trades" : "across all bots"}
+          size={ledeSize}
         />
       </div>
 

@@ -361,6 +361,7 @@ export function EditorView({
   const [flash, setFlash] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const T = useT();
+  const { isMobile } = useBreakpoint();
 
   // Lock page scroll while the editor is mounted — the canvas handles its own scrolling.
   useEffect(() => {
@@ -1146,17 +1147,20 @@ export function EditorView({
             aria-label={libraryOpen ? "Close template library" : "Open template library"}
             style={{
               position: "absolute",
-              left: libraryOpen ? 280 : 0,
+              // Desktop: tab rides the 280px panel's right edge. Mobile: the
+              // panel is full-width, so when open the tab hugs the screen's
+              // right edge instead of floating mid-content.
+              left: libraryOpen ? (isMobile ? "calc(100% - 18px)" : 280) : 0,
               top: "50%",
               transform: "translateY(-50%)",
               zIndex: 20,
               width: 18,
               height: 52,
-              background: libraryOpen ? "transparent" : "transparent",
+              background: "transparent",
               border: `1px solid ${T.outlineFaint}`,
-              borderLeft: libraryOpen ? "none" : undefined,
-              borderRight: libraryOpen ? undefined : "none",
-              borderRadius: libraryOpen ? "0 8px 8px 0" : "0 8px 8px 0",
+              borderLeft: libraryOpen && !isMobile ? "none" : undefined,
+              borderRight: !libraryOpen || isMobile ? "none" : undefined,
+              borderRadius: libraryOpen && isMobile ? "8px 0 0 8px" : "0 8px 8px 0",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -1943,6 +1947,7 @@ function Canvas({
     selection.source === source;
   const T = useT();
   const isTouch = useTouchPointer();
+  const { isMobile } = useBreakpoint();
   const [pan, setPan] = useState({ x: 40, y: 20 });
   const [zoom, setZoom] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
@@ -2125,7 +2130,7 @@ function Canvas({
     // (402px+402px on a 1500px canvas left a visible dead zone in the
     // middle). The bezier control-point offset (80px in pushWire) gives the
     // wire a gentle sweep at this gap.
-    const SPINE_GAP = 160;
+    const SPINE_GAP = isMobile ? 64 : 160;
     const ROOT_TO_OUTPUT_GAP = SPINE_GAP;
     const RISK_NODE_W = RiskDefaultsNode.WIDTH;
     const RISK_TO_EXIT_GAP = SPINE_GAP;
@@ -2234,7 +2239,7 @@ function Canvas({
           // right pin → exit root, so it reads as a junction (governs both
           // entry- and exit-driven trades) rather than a one-sided dead-end.
           // Spine gap — see resetView for rationale.
-          const SPINE_GAP = 160;
+          const SPINE_GAP = isMobile ? 64 : 160;
           const ROOT_TO_OUTPUT_GAP = SPINE_GAP;
           const RISK_NODE_W = RiskDefaultsNode.WIDTH;
           const RISK_TO_EXIT_GAP = SPINE_GAP;
@@ -2317,11 +2322,13 @@ function Canvas({
             opts: { id: string; dashed: boolean; color?: string; width?: number },
           ) => {
             // Cubic-bezier with both control points at midX. midX is offset
-            // 80px from `from` toward `to` (sign-aware), so mirrored exit
+            // up to 80px from `from` toward `to` (sign-aware), so mirrored exit
             // wires get a symmetric curve flowing leftward instead of an
-            // overshoot to the right.
+            // overshoot to the right. Clamp the offset to the wire's own length
+            // so the shorter mobile spine wires curve cleanly instead of
+            // overshooting past `to` (no-op on desktop where wires are ≥ 80px).
             const direction = Math.sign(to.x - from.x) || 1;
-            const midX = from.x + 80 * direction;
+            const midX = from.x + Math.min(80, Math.abs(to.x - from.x)) * direction;
             wires.push({
               id: opts.id,
               d: `M ${from.x} ${from.y} C ${midX} ${from.y} ${midX} ${to.y} ${to.x} ${to.y}`,
@@ -2582,8 +2589,12 @@ function Canvas({
       <div
         style={{
           position: "absolute",
-          bottom: 20,
-          right: drawerOpen ? 412 : 24,
+          // Mobile: the bottom can't fit the wide action bar plus these pills,
+          // so move zoom + status up to the top-left, stacked (status above).
+          // Stacking (not side-by-side) avoids collisions on narrow phones.
+          ...(isMobile
+            ? { top: 54, left: 12 }
+            : { bottom: 20, right: drawerOpen ? 412 : 24 }),
           display: "flex",
           alignItems: "center",
           gap: 2,
@@ -2623,8 +2634,10 @@ function Canvas({
       <div
         style={{
           position: "absolute",
-          bottom: 60,
-          right: drawerOpen ? 412 : 24,
+          // Mobile: top-left, above the zoom pill (see zoom pill comment).
+          ...(isMobile
+            ? { top: 12, left: 12 }
+            : { bottom: 60, right: drawerOpen ? 412 : 24 }),
           zIndex: 5,
           transition: "right 240ms cubic-bezier(0.4, 0, 0.2, 1)",
         }}

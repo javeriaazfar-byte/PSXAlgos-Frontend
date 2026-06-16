@@ -9,7 +9,7 @@ import {
 } from "./home-view";
 import { signBackendJwt } from "@/lib/api/jwt";
 import { getStrategies } from "@/lib/api/strategies";
-import { getBots } from "@/lib/api/bots";
+import { getBots, getBotPerformance } from "@/lib/api/bots";
 import {
   getOpenPositions,
   getClosedTrades,
@@ -204,6 +204,8 @@ export default async function Home() {
     }))
   );
   const dashSignals = allSignals.slice(0, 7);
+  const buyToday = allSignals.filter((s) => s.dir === "BUY").length;
+  const sellToday = allSignals.filter((s) => s.dir === "SELL").length;
 
   // ── Active / paused bots ────────────────────────────────────────────────────
 
@@ -218,7 +220,22 @@ export default async function Home() {
       pnl: safePct(b.total_return_pct) ?? 0,
       status: mapBotStatus(b.status),
       openPositions: b.open_positions_count ?? 0,
+      spark: [],
     }));
+
+  // Per-bot equity curves for the dashboard sparklines. One /performance call
+  // per displayed bot, in parallel; any failure degrades that bot to a flat
+  // line rather than breaking the page.
+  const botPerf = await Promise.allSettled(
+    dashBots.map((b) => getBotPerformance(jwt, Number(b.id), 30))
+  );
+  botPerf.forEach((res, i) => {
+    if (res.status === "fulfilled") {
+      dashBots[i].spark = (res.value.equity_curve ?? [])
+        .map((s) => Number(s.total_equity))
+        .filter((n) => Number.isFinite(n));
+    }
+  });
 
   // ── Open positions snapshot ─────────────────────────────────────────────────
 
@@ -234,6 +251,20 @@ export default async function Home() {
       day: "2-digit",
     }),
   }));
+
+  // Cumulative realized-P&L curve for the portfolio's main chart, reconstructed
+  // from closed trades (oldest → newest). This is the only honest time series we
+  // have: the journal has no daily equity snapshot endpoint.
+  const portfolioSeries: number[] = (() => {
+    const sorted = [...closedTrades].sort(
+      (a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime()
+    );
+    let cum = 0;
+    return sorted.map((t) => {
+      cum += safePct(t.pnl) ?? 0;
+      return cum;
+    });
+  })();
 
   return (
     <DashboardView
@@ -255,6 +286,9 @@ export default async function Home() {
       signals={dashSignals}
       bots={dashBots}
       positions={dashPositions}
+      portfolioSeries={portfolioSeries}
+      buyToday={buyToday}
+      sellToday={sellToday}
       userName={session.user.name ?? null}
     />
   );

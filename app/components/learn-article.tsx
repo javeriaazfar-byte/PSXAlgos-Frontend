@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
 import { useT } from "@/components/theme";
-import { MarketingNav, SkipLink } from "@/components/frame";
+import { AppFrame } from "@/components/frame";
 import { useBreakpoint, PAD, pick, clampPx } from "@/components/responsive";
 import type { Block, GlossaryEntry } from "@/app/learn/_content/types";
 
@@ -164,13 +164,9 @@ export function LearnArticle({ entry }: { entry: GlossaryEntry }) {
   const padX = pick(bp, PAD.pageMarketing);
 
   return (
-    <div style={{ minHeight: "100dvh", background: T.surface, color: T.text }}>
-      <SkipLink />
-      <MarketingNav />
-
-      <main
-        id="main-content"
-        style={{ padding: `28px ${padX} 80px`, maxWidth: 760, margin: "0 auto" }}
+    <AppFrame>
+      <div
+        style={{ padding: `28px ${padX} 80px`, maxWidth: 760, margin: "0 auto", width: "100%" }}
       >
         {/* Breadcrumb */}
         <nav
@@ -359,7 +355,7 @@ export function LearnArticle({ entry }: { entry: GlossaryEntry }) {
             timeZone: "UTC",
           })}
         </div>
-      </main>
-    </div>
+      </div>
+    </AppFrame>
   );
 }

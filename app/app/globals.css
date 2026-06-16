@@ -273,20 +273,19 @@ canvas {
 
 /* Mobile sticky bottom bar. WCAG 2.2 SC 2.4.11 — pair with
  * scroll-padding-bottom on the form container so keyboard focus is never
- * obscured. */
+ * obscured.
+ *
+ * `bottom: 0` only — do NOT add a tab-bar offset here. This bar is always
+ * rendered inside AppFrame's <main>, which already reserves
+ * `calc(56px + safe-area)` of padding-bottom for the fixed BottomTabBar. The
+ * sticky scroll container therefore ends *above* the tab bar already, so any
+ * extra offset double-counts it: the bar floats ~56px too high, leaving a gap
+ * above the tab bar and parking the last form section behind the bar. */
 .psx-mobile-cta-bar {
   position: sticky;
   bottom: 0;
   z-index: 5;
   background: linear-gradient(180deg, transparent, var(--surface) 30%);
-  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  padding: 14px 16px;
   border-top: 1px solid var(--outline-faint);
-}
-
-/* On mobile (< 640px) the BottomTabBar (56px) sits above the safe area.
- * Sticky CTAs must clear it so they don't overlap the tab bar. */
-@media (max-width: 639px) {
-  .psx-mobile-cta-bar {
-    bottom: calc(56px + env(safe-area-inset-bottom));
-  }
 }

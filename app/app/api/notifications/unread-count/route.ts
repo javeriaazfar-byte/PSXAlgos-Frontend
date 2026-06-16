@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { signBackendJwt } from "@/lib/api/jwt";
-import { ApiError } from "@/lib/api/client";
 import { getUnreadCount } from "@/lib/api/notifications";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    // No session — report zero rather than erroring. The bell polls this on a
+    // timer; a hard 401 here just trips the dev error overlay for a piece of
+    // non-critical chrome.
+    return NextResponse.json({ count: 0 });
   }
   const jwt = signBackendJwt({
     sub: session.user.id,
@@ -15,13 +17,10 @@ export async function GET() {
   });
   try {
     return NextResponse.json(await getUnreadCount(jwt));
-  } catch (err) {
-    if (err instanceof ApiError) {
-      return NextResponse.json(
-        { error: err.message, detail: err.body },
-        { status: err.status },
-      );
-    }
-    return NextResponse.json({ error: "server error" }, { status: 500 });
+  } catch {
+    // The unread badge is non-essential. If the backend is unreachable or the
+    // token is rejected, degrade to zero unread instead of surfacing an error
+    // response — the next poll recovers once auth/connectivity is restored.
+    return NextResponse.json({ count: 0 });
   }
 }

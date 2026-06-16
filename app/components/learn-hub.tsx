@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useT } from "@/components/theme";
-import { MarketingNav, SkipLink } from "@/components/frame";
+import { AppFrame } from "@/components/frame";
 import { useBreakpoint, PAD, pick, clampPx } from "@/components/responsive";
 import type { GlossaryCategory } from "@/app/learn/_content/types";
 
@@ -40,13 +40,9 @@ export function LearnHub({ items }: { items: HubItem[] }) {
   })).filter((g) => g.items.length > 0);
 
   return (
-    <div style={{ minHeight: "100dvh", background: T.surface, color: T.text }}>
-      <SkipLink />
-      <MarketingNav />
-
-      <main
-        id="main-content"
-        style={{ padding: `36px ${padX} 80px`, maxWidth: 1000, margin: "0 auto" }}
+    <AppFrame>
+      <div
+        style={{ padding: `36px ${padX} 80px`, maxWidth: 1000, margin: "0 auto", width: "100%" }}
       >
         <div
           style={{
@@ -146,7 +142,7 @@ export function LearnHub({ items }: { items: HubItem[] }) {
             </div>
           </section>
         ))}
-      </main>
-    </div>
+      </div>
+    </AppFrame>
   );
 }

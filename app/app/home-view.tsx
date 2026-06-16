@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { AppFrame } from "@/components/frame";
 import { useT } from "@/components/theme";
-import { Btn, Kicker } from "@/components/atoms";
-import { Icon } from "@/components/icons";
+import { EditorialHeader, Kicker, Btn } from "@/components/atoms";
 import { useBreakpoint, PAD, pick, clampPx } from "@/components/responsive";
+import { useRouter } from "next/navigation";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -38,6 +37,8 @@ export interface DashBot {
   pnl: number;
   status: "RUNNING" | "PAUSED" | "STOPPED";
   openPositions: number;
+  // Equity-curve points (total_equity over the last 30 days) for the sparkline.
+  spark: number[];
 }
 
 export interface DashPosition {
@@ -69,30 +70,37 @@ export interface DashboardViewProps {
   signals: DashSignal[];
   bots: DashBot[];
   positions: DashPosition[];
+  portfolioSeries: number[];
+  buyToday: number;
+  sellToday: number;
   userName: string | null;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function fmtPkr(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}PKR ${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sign}PKR ${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}PKR ${Math.round(abs).toLocaleString()}`;
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
 export function DashboardView({
-  totalStrategies,
-  deployedStrategies,
-  draftStrategies,
   signalsToday,
-  strategiesToday,
-  bestBt,
-  bestSharpe,
-  bestBtName,
   runningBots,
   pausedBots,
   totalBots,
   openPositionCount,
-  closedTradeCount,
   realizedPnl,
-  strategies,
   signals,
   bots,
   positions,
+  portfolioSeries,
+  buyToday,
+  sellToday,
   userName,
 }: DashboardViewProps) {
   const T = useT();
@@ -100,408 +108,388 @@ export function DashboardView({
   const padX = pick(bp, PAD.page);
   const router = useRouter();
 
+  // Accent line (3px top border) colours per card. Amber (dark) mode keeps the
+  // earthy gold/orange/green it already had; Paper (light) mode uses an explicit
+  // yellow / yellow / green set.
+  const lines =
+    T.mode === "dark"
+      ? { bots: T.accent, portfolio: T.primary, signals: T.deploy }
+      : { bots: "#d4a017", portfolio: "#d4a017", signals: "#2e8a5f" };
+
   const firstName = userName ? userName.split(" ")[0] : null;
 
-  const pnlLabel =
-    realizedPnl !== 0
-      ? `${realizedPnl >= 0 ? "+" : ""}PKR ${Math.abs(Math.round(realizedPnl)).toLocaleString()} realized`
-      : closedTradeCount > 0
-      ? `${closedTradeCount} closed trades`
-      : "no closed trades";
+  // Portfolio snapshot derived from open positions
+  const totalInvested = positions.reduce((s, p) => s + p.qty * p.entry, 0);
+  const totalValue = positions.reduce(
+    (s, p) => s + p.qty * (p.now ?? p.entry),
+    0
+  );
+  const unrealizedPkr = totalValue - totalInvested;
+  const unrealizedPct =
+    totalInvested > 0 ? (unrealizedPkr / totalInvested) * 100 : 0;
+
+  // Signals sentiment score in [-1, 1] → gauge needle
+  const sigTotal = buyToday + sellToday;
+  const sentiment = sigTotal > 0 ? (buyToday - sellToday) / sigTotal : null;
 
   return (
     <AppFrame route="/">
-      {/* ── Page header ── */}
-      <div
-        style={{
-          padding: pick(bp, {
-            mobile: `20px ${padX} 0`,
-            desktop: `28px ${padX} 0`,
-          }),
-        }}
-      >
-        <Kicker>Dashboard · overview</Kicker>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 12,
-            marginTop: 10,
-          }}
-        >
-          <h1
-            style={{
-              fontFamily: T.fontHead,
-              fontSize: clampPx(26, 5, 38),
-              fontWeight: 500,
-              letterSpacing: -0.5,
-              color: T.text,
-              margin: 0,
-              lineHeight: 1.1,
-            }}
-          >
-            Welcome back{firstName ? `, ${firstName}` : ""}.{" "}
-            <span style={{ color: T.text3, fontWeight: 400, fontStyle: "italic" }}>
-              Here&apos;s what&apos;s happening.
+      <EditorialHeader
+        kicker="Dashboard · overview"
+        title={
+          <>
+            Welcome back{firstName ? `, ${firstName}` : ""}
+            <span style={{ fontStyle: "italic", color: T.primaryLight, fontWeight: 400 }}> ·</span>{" "}
+            <span style={{ color: T.text3, fontWeight: 400, fontSize: "0.7em" }}>
+              here&apos;s what&apos;s happening.
             </span>
-          </h1>
-          <span
-            style={{
-              fontFamily: T.fontMono,
-              fontSize: 11,
-              color: T.text3,
-              flexShrink: 0,
-            }}
-          >
-            {new Date().toLocaleDateString("en-GB", {
-              weekday: "short",
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-            })}
-          </span>
-        </div>
-        <div style={{ height: 1, background: T.outlineFaint, marginTop: 16 }} />
-      </div>
+          </>
+        }
+        meta={
+          <>
+            <span>
+              <span style={{ color: runningBots > 0 ? T.gain : T.text3 }}>●</span>{" "}
+              {runningBots} running
+            </span>
+            <span>{openPositionCount} open position{openPositionCount !== 1 ? "s" : ""}</span>
+            <span style={{ color: signalsToday > 0 ? T.deploy : T.text3 }}>
+              {signalsToday} signal{signalsToday !== 1 ? "s" : ""} today
+            </span>
+          </>
+        }
+      />
 
-      {/* ── Scrollable content ── */}
+      {/* ── 3-card grid ── */}
       <div
         style={{
           flex: 1,
-          overflow: "auto",
+          minHeight: 0,
           padding: pick(bp, {
-            mobile: `16px ${padX} 40px`,
-            desktop: `24px ${padX} 56px`,
+            mobile: `16px ${padX} 24px`,
+            desktop: `20px ${padX} 24px`,
           }),
-          display: "flex",
-          flexDirection: "column",
-          gap: pick(bp, { mobile: 20, desktop: 28 }),
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+          gap: 14,
+          overflow: isMobile ? "auto" : "hidden",
         }}
       >
-        {/* ── Stat cards ── */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
-            gap: 10,
-          }}
-        >
-          <StatCard
-            label="Strategies"
-            value={totalStrategies === 0 ? "0" : String(totalStrategies)}
-            sub={
-              totalStrategies === 0
-                ? "none yet"
-                : `${deployedStrategies} deployed · ${draftStrategies} draft`
-            }
-            accentColor={T.primary}
-            href="/strategies"
-          />
-          <StatCard
-            label="Signals today"
-            value={String(signalsToday)}
-            sub={
-              signalsToday === 0
-                ? "no signals yet"
-                : `across ${strategiesToday} ${strategiesToday === 1 ? "strategy" : "strategies"}`
-            }
-            accentColor={T.deploy}
-            href="/signals"
-          />
-          <StatCard
-            label="Active bots"
-            value={String(runningBots)}
-            sub={
-              totalBots === 0
-                ? "no bots yet"
-                : pausedBots > 0
-                ? `${pausedBots} paused · ${totalBots} total`
-                : `${totalBots} total`
-            }
-            accentColor={T.accent}
-            href="/bots"
-          />
-          <StatCard
-            label="Best backtest"
-            value={bestBt}
-            sub={
-              bestBt === "—"
-                ? "no backtests yet"
-                : bestSharpe != null
-                ? `sharpe ${bestSharpe.toFixed(2)}`
-                : bestBtName
-            }
-            accentColor={
-              bestBt === "—"
-                ? T.text3
-                : bestBt.startsWith("+")
-                ? T.gain
-                : T.loss
-            }
-            href="/backtest"
-          />
-          <StatCard
-            label="Portfolio"
-            value={String(openPositionCount)}
-            sub={pnlLabel}
-            accentColor={T.text2}
-            href="/portfolio"
-          />
-        </div>
-
-        {/* ── Main content grid ── */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isMobile ? "1fr" : "3fr 2fr",
-            gap: 16,
-            alignItems: "start",
-          }}
-        >
-          {/* Left: strategies */}
-          <ContentCard
-            kicker="Your strategies"
-            meta={`${totalStrategies} total`}
-            href="/strategies"
-            linkLabel="View all →"
-            empty={strategies.length === 0}
-            emptyText="You haven't built any strategies yet."
-            emptyAction={
-              <Btn
-                variant="primary"
-                size="sm"
-                icon={Icon.plus}
-                onClick={() => router.push("/strategies")}
-              >
-                New strategy
-              </Btn>
-            }
-          >
-            <div style={{ marginTop: 4 }}>
-              {/* Column headers */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 74px 70px 54px",
-                  padding: "6px 14px",
-                  borderBottom: `1px solid ${T.outlineVariant}`,
-                  fontFamily: T.fontMono,
-                  fontSize: 9.5,
-                  color: T.text3,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.6,
-                }}
-              >
-                <span>Name</span>
-                <span style={{ textAlign: "right" }}>Backtest</span>
-                <span style={{ textAlign: "right" }}>Sharpe</span>
-                <span style={{ textAlign: "right" }}>Signals</span>
-              </div>
-              {strategies.map((s) => (
-                <StrategyRow key={s.id} s={s} />
-              ))}
-            </div>
-          </ContentCard>
-
-          {/* Right: signals + bots */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Signals */}
-            <ContentCard
-              kicker="Today's signals"
-              meta={`${signalsToday} fired`}
-              href="/signals"
-              linkLabel="View all →"
-              empty={signals.length === 0}
-              emptyText="No signals have fired today."
-            >
-              <div
-                style={{
-                  marginTop: 8,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                }}
-              >
-                {signals.map((sig) => (
-                  <SignalRow key={sig.id} sig={sig} />
-                ))}
-              </div>
-            </ContentCard>
-
-            {/* Bots */}
-            <ContentCard
-              kicker="Active bots"
-              meta={`${runningBots} running`}
-              href="/bots"
-              linkLabel="View all →"
-              empty={bots.length === 0}
-              emptyText="No active bots yet."
-              emptyAction={
-                <Btn
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => router.push("/bots")}
-                >
-                  Set up a bot
+        {/* ── BOTS card ── */}
+        <DashCard
+          kicker="bots"
+          accentColor={lines.bots}
+          footer={
+            <CardFooter
+              left={
+                <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.text3 }}>
+                  {runningBots > 0 && (
+                    <span style={{ color: T.gain }}>{runningBots} running</span>
+                  )}
+                  {runningBots > 0 && pausedBots > 0 && " · "}
+                  {pausedBots > 0 && (
+                    <span style={{ color: T.warning }}>{pausedBots} paused</span>
+                  )}
+                  {totalBots === 0 && <span>no bots yet</span>}
+                </span>
+              }
+              right={
+                <Btn variant="ghost" size="sm" onClick={() => router.push("/bots")}>
+                  Manage bots →
                 </Btn>
               }
+            />
+          }
+        >
+          {bots.length === 0 ? (
+            <EmptyNote>No active bots yet. Deploy a strategy to start one.</EmptyNote>
+          ) : (
+            bots.map((b) => <BotRow key={b.id} bot={b} />)
+          )}
+        </DashCard>
+
+        {/* ── PORTFOLIO card ── */}
+        <DashCard
+          kicker="portfolio"
+          accentColor={lines.portfolio}
+          footer={
+            <CardFooter
+              left={
+                <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.text3 }}>
+                  {openPositionCount} open position{openPositionCount !== 1 ? "s" : ""}
+                </span>
+              }
+              right={
+                <Btn variant="ghost" size="sm" onClick={() => router.push("/portfolio")}>
+                  Portfolio →
+                </Btn>
+              }
+            />
+          }
+        >
+          {/* Hero value */}
+          <div style={{ padding: "14px 0 6px" }}>
+            <div
+              style={{
+                fontFamily: T.fontMono,
+                fontSize: 9.5,
+                letterSpacing: 0.6,
+                textTransform: "uppercase",
+                color: T.text3,
+              }}
             >
-              <div
-                style={{
-                  marginTop: 8,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                }}
-              >
-                {bots.map((b) => (
-                  <BotItem key={b.id} bot={b} />
-                ))}
-              </div>
-            </ContentCard>
-          </div>
-        </div>
-
-        {/* ── Portfolio snapshot ── */}
-        {positions.length > 0 && (
-          <ContentCard
-            kicker="Open positions"
-            meta={`${openPositionCount} open`}
-            href="/portfolio"
-            linkLabel="View portfolio →"
-            empty={false}
-          >
-            <div style={{ marginTop: 4 }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: isMobile
-                    ? "70px 1fr 80px"
-                    : "70px 60px 90px 90px 90px 1fr",
-                  padding: "6px 14px",
-                  borderBottom: `1px solid ${T.outlineVariant}`,
-                  fontFamily: T.fontMono,
-                  fontSize: 9.5,
-                  color: T.text3,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.6,
-                }}
-              >
-                <span>Symbol</span>
-                {!isMobile && <span style={{ textAlign: "right" }}>Qty</span>}
-                {!isMobile && <span style={{ textAlign: "right" }}>Entry</span>}
-                {!isMobile && <span style={{ textAlign: "right" }}>Now</span>}
-                <span style={{ textAlign: "right" }}>P&amp;L</span>
-                <span style={{ paddingLeft: isMobile ? 0 : 14 }}>Strategy</span>
-              </div>
-              {positions.map((p) => (
-                <PositionRow key={p.id} pos={p} isMobile={isMobile} />
-              ))}
+              Portfolio value
             </div>
-          </ContentCard>
-        )}
+            <div
+              style={{
+                fontFamily: T.fontHead,
+                fontSize: clampPx(24, 4.4, 32),
+                fontWeight: 500,
+                color: T.text,
+                letterSpacing: -0.5,
+                lineHeight: 1.05,
+                marginTop: 3,
+              }}
+            >
+              {fmtPkr(totalValue)}
+            </div>
+            <div
+              style={{
+                fontFamily: T.fontMono,
+                fontSize: 11.5,
+                color: unrealizedPkr >= 0 ? T.gain : T.loss,
+                marginTop: 5,
+              }}
+            >
+              {unrealizedPkr >= 0 ? "▲ +" : "▼ "}
+              {fmtPkr(unrealizedPkr)} ({unrealizedPct >= 0 ? "+" : ""}
+              {unrealizedPct.toFixed(2)}%) open
+            </div>
+          </div>
 
-        {/* ── Quick actions ── */}
-        <div>
-          <Kicker>Quick actions</Kicker>
+          {/* Main graph: cumulative realized P&L */}
+          <div style={{ marginTop: 4 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                fontFamily: T.fontMono,
+                fontSize: 9.5,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+                color: T.text3,
+                marginBottom: 4,
+              }}
+            >
+              <span>Realized P&amp;L · cumulative</span>
+              {portfolioSeries.length > 0 && (
+                <span
+                  style={{
+                    color: realizedPnl >= 0 ? T.gain : T.loss,
+                    fontWeight: 600,
+                  }}
+                >
+                  {realizedPnl >= 0 ? "+" : ""}
+                  {fmtPkr(realizedPnl)}
+                </span>
+              )}
+            </div>
+            <PortfolioChart data={portfolioSeries} />
+          </div>
+
+          {/* Snapshot highlights */}
           <div
             style={{
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-              marginTop: 14,
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px 10px",
+              padding: "14px 0 6px",
+              marginTop: 6,
+              borderTop: `1px solid ${T.outlineFaint}`,
             }}
           >
-            <Btn
-              variant="primary"
-              size="sm"
-              icon={Icon.plus}
-              style={{ boxShadow: `0 3px 10px ${T.primary}55` }}
-              onClick={() => router.push("/strategies")}
-            >
-              New strategy
-            </Btn>
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => router.push("/signals")}
-            >
-              View signals
-            </Btn>
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => router.push("/bots")}
-            >
-              Manage bots
-            </Btn>
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => router.push("/portfolio")}
-            >
-              Log a trade
-            </Btn>
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => router.push("/backtest")}
-            >
-              Run backtest
-            </Btn>
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => router.push("/leaderboard")}
-            >
-              Leaderboard
-            </Btn>
+            <Stat label="Invested" value={fmtPkr(totalInvested)} />
+            <Stat
+              label="Unrealized"
+              value={`${unrealizedPkr >= 0 ? "+" : ""}${fmtPkr(unrealizedPkr)}`}
+              color={unrealizedPkr >= 0 ? T.gain : T.loss}
+            />
+            <Stat
+              label="Realized"
+              value={`${realizedPnl >= 0 ? "+" : ""}${fmtPkr(realizedPnl)}`}
+              color={realizedPnl >= 0 ? T.gain : T.loss}
+            />
+            <Stat label="Open positions" value={String(openPositionCount)} />
           </div>
-        </div>
+        </DashCard>
+
+        {/* ── SIGNALS card ── */}
+        <DashCard
+          kicker="signals"
+          accentColor={lines.signals}
+          footer={
+            <CardFooter
+              left={
+                <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.text3 }}>
+                  {sigTotal > 0 ? (
+                    <>
+                      <span style={{ color: T.gain }}>{buyToday} BUY</span>
+                      {" · "}
+                      <span style={{ color: T.loss }}>{sellToday} SELL</span>
+                    </>
+                  ) : (
+                    "no signals today"
+                  )}
+                </span>
+              }
+              right={
+                <Btn variant="ghost" size="sm" onClick={() => router.push("/signals")}>
+                  All signals →
+                </Btn>
+              }
+            />
+          }
+        >
+          {/* Gauge meter */}
+          <div style={{ padding: "12px 0 4px" }}>
+            <Gauge sentiment={sentiment} buy={buyToday} sell={sellToday} />
+          </div>
+
+          {/* Latest signals (compact, no bars) */}
+          {signals.length > 0 && (
+            <div style={{ borderTop: `1px solid ${T.outlineFaint}`, marginTop: 4 }}>
+              {signals.slice(0, 5).map((sig) => (
+                <SignalRow key={sig.id} sig={sig} />
+              ))}
+            </div>
+          )}
+          {signals.length === 0 && (
+            <EmptyNote>No signals have fired today.</EmptyNote>
+          )}
+        </DashCard>
       </div>
     </AppFrame>
   );
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── Card shell ─────────────────────────────────────────────────────────────────
 
-function StatCard({
-  label,
-  value,
-  sub,
+function DashCard({
+  kicker,
   accentColor,
-  href,
+  footer,
+  children,
 }: {
-  label: string;
-  value: string;
-  sub: string;
+  kicker: string;
   accentColor: string;
-  href: string;
+  footer: ReactNode;
+  children: ReactNode;
 }) {
   const T = useT();
   return (
-    <Link
-      href={href}
+    <div
       style={{
-        display: "block",
-        padding: "16px 18px 14px",
-        background: T.surface2,
+        background: T.surfaceLowest,
+        border: `1px solid ${T.outlineVariant}`,
         borderRadius: 10,
-        boxShadow: `0 0 0 1px ${T.outlineFaint}`,
-        textDecoration: "none",
-        borderLeft: `3px solid ${accentColor}`,
-        transition: "box-shadow 120ms ease",
+        borderTop: `3px solid ${accentColor}`,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        minHeight: 0,
       }}
     >
+      {/* Header */}
+      <div
+        style={{
+          padding: "14px 16px 10px",
+          borderBottom: `1px solid ${T.outlineFaint}`,
+          flexShrink: 0,
+        }}
+      >
+        <Kicker color={accentColor}>{kicker}</Kicker>
+      </div>
+
+      {/* Scrollable body */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "0 16px",
+          minHeight: 0,
+        }}
+      >
+        {children}
+      </div>
+
+      {/* Footer */}
+      <div
+        style={{
+          borderTop: `1px solid ${T.outlineFaint}`,
+          flexShrink: 0,
+        }}
+      >
+        {footer}
+      </div>
+    </div>
+  );
+}
+
+function CardFooter({ left, right }: { left: ReactNode; right: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "8px 12px 8px 16px",
+        gap: 8,
+      }}
+    >
+      {left}
+      {right}
+    </div>
+  );
+}
+
+// ── Shared ─────────────────────────────────────────────────────────────────────
+
+function EmptyNote({ children }: { children: ReactNode }) {
+  const T = useT();
+  return (
+    <div
+      style={{
+        padding: "20px 0",
+        fontFamily: T.fontMono,
+        fontSize: 11.5,
+        color: T.text3,
+        lineHeight: 1.5,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  const T = useT();
+  return (
+    <div>
       <div
         style={{
           fontFamily: T.fontMono,
           fontSize: 9.5,
-          color: T.text3,
-          letterSpacing: 0.8,
+          letterSpacing: 0.5,
           textTransform: "uppercase",
+          color: T.text3,
         }}
       >
         {label}
@@ -509,162 +497,328 @@ function StatCard({
       <div
         style={{
           fontFamily: T.fontHead,
-          fontSize: 30,
-          fontWeight: 500,
-          color: accentColor,
+          fontSize: 15,
+          fontWeight: 600,
+          color: color ?? T.text,
+          marginTop: 2,
           fontVariantNumeric: "tabular-nums",
-          letterSpacing: -0.3,
-          marginTop: 8,
-          lineHeight: 1,
         }}
       >
         {value}
       </div>
-      <div
-        style={{
-          fontFamily: T.fontMono,
-          fontSize: 10.5,
-          color: T.text3,
-          marginTop: 8,
-          lineHeight: 1.4,
-        }}
-      >
-        {sub}
-      </div>
-    </Link>
-  );
-}
-
-function ContentCard({
-  kicker,
-  meta,
-  href,
-  linkLabel,
-  children,
-  empty,
-  emptyText,
-  emptyAction,
-}: {
-  kicker: string;
-  meta?: string;
-  href: string;
-  linkLabel?: string;
-  children?: ReactNode;
-  empty: boolean;
-  emptyText?: string;
-  emptyAction?: ReactNode;
-}) {
-  const T = useT();
-  return (
-    <div
-      style={{
-        background: T.surface2,
-        borderRadius: 12,
-        boxShadow: `0 0 0 1px ${T.outlineFaint}`,
-        padding: "16px 0 4px",
-        overflow: "hidden",
-      }}
-    >
-      {/* Card header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          padding: "0 16px 12px",
-          borderBottom: `1px solid ${T.outlineFaint}`,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <Kicker>{kicker}</Kicker>
-          {meta && (
-            <span
-              style={{
-                fontFamily: T.fontMono,
-                fontSize: 10.5,
-                color: T.text3,
-              }}
-            >
-              {meta}
-            </span>
-          )}
-        </div>
-        {linkLabel && (
-          <Link
-            href={href}
-            style={{
-              fontFamily: T.fontMono,
-              fontSize: 10.5,
-              color: T.primaryLight,
-              textDecoration: "none",
-              flexShrink: 0,
-            }}
-          >
-            {linkLabel}
-          </Link>
-        )}
-      </div>
-
-      {empty ? (
-        <div
-          style={{
-            padding: "24px 16px 20px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-start",
-            gap: 12,
-          }}
-        >
-          <span
-            style={{
-              fontFamily: T.fontMono,
-              fontSize: 11.5,
-              color: T.text3,
-            }}
-          >
-            {emptyText}
-          </span>
-          {emptyAction}
-        </div>
-      ) : (
-        children
-      )}
     </div>
   );
 }
 
-function StrategyRow({ s }: { s: DashStrategy }) {
+// ── Sparkline (bots) ─────────────────────────────────────────────────────────
+
+function Sparkline({
+  data,
+  color,
+  height = 30,
+}: {
+  data: number[];
+  color: string;
+  height?: number;
+}) {
   const T = useT();
-  const statusColors: Record<string, string> = {
-    DEPLOYED: T.deploy,
-    DRAFT: T.text3,
-    PAUSED: T.warning,
-    ARCHIVED: T.text3,
-  };
-  const c = statusColors[s.status] ?? T.text3;
+  if (!data || data.length < 2) {
+    // Not enough history yet — show a flat baseline rather than a fake curve.
+    return (
+      <div style={{ height, display: "flex", alignItems: "center" }}>
+        <div
+          style={{
+            width: "100%",
+            borderTop: `1px dashed ${T.outlineVariant}`,
+          }}
+        />
+      </div>
+    );
+  }
+  const W = 140;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const stepX = W / (data.length - 1);
+  const pts = data.map(
+    (v, i) => [i * stepX, height - ((v - min) / range) * height] as const
+  );
+  const line = pts
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
+    .join(" ");
+  const area = `${line} L${W},${height} L0,${height} Z`;
+  const last = pts[pts.length - 1];
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${height}`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height, display: "block", overflow: "visible" }}
+    >
+      <path d={area} fill={color} fillOpacity={0.1} />
+      <path
+        d={line}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+      <circle cx={last[0]} cy={last[1]} r={2} fill={color} vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ── Portfolio chart ──────────────────────────────────────────────────────────
+
+function PortfolioChart({ data, height = 96 }: { data: number[]; height?: number }) {
+  const T = useT();
+  if (!data || data.length < 2) {
+    return (
+      <div
+        style={{
+          height,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          border: `1px dashed ${T.outlineVariant}`,
+          borderRadius: 6,
+          fontFamily: T.fontMono,
+          fontSize: 10.5,
+          color: T.text3,
+          textAlign: "center",
+          padding: "0 14px",
+          lineHeight: 1.5,
+        }}
+      >
+        Your realized P&amp;L curve appears here as you close trades.
+      </div>
+    );
+  }
+  const W = 300;
+  const min = Math.min(...data, 0);
+  const max = Math.max(...data, 0);
+  const range = max - min || 1;
+  const stepX = W / (data.length - 1);
+  const yFor = (v: number) => height - ((v - min) / range) * height;
+  const baseY = yFor(0);
+  const pts = data.map((v, i) => [i * stepX, yFor(v)] as const);
+  const line = pts
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
+    .join(" ");
+  const area = `${line} L${W},${baseY.toFixed(1)} L0,${baseY.toFixed(1)} Z`;
+  const up = data[data.length - 1] >= 0;
+  const color = up ? T.gain : T.loss;
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${height}`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height, display: "block" }}
+    >
+      <defs>
+        <linearGradient id="psx-portfolio-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.22} />
+          <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+        </linearGradient>
+      </defs>
+      {/* zero baseline */}
+      <line
+        x1="0"
+        y1={baseY}
+        x2={W}
+        y2={baseY}
+        stroke={T.outlineVariant}
+        strokeWidth={1}
+        strokeDasharray="3 3"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path d={area} fill="url(#psx-portfolio-grad)" />
+      <path
+        d={line}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.75}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+// ── Gauge (signals) ──────────────────────────────────────────────────────────
+
+function polar(cx: number, cy: number, r: number, angleDeg: number) {
+  const a = (angleDeg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(a), y: cy - r * Math.sin(a) };
+}
+
+// Annular sector from startDeg (larger) → endDeg (smaller), measured with
+// 0° = right, 180° = left, arc over the top of the circle.
+function arcBand(
+  cx: number,
+  cy: number,
+  rO: number,
+  rI: number,
+  startDeg: number,
+  endDeg: number
+) {
+  const oS = polar(cx, cy, rO, startDeg);
+  const oE = polar(cx, cy, rO, endDeg);
+  const iE = polar(cx, cy, rI, endDeg);
+  const iS = polar(cx, cy, rI, startDeg);
+  return [
+    `M${oS.x.toFixed(2)},${oS.y.toFixed(2)}`,
+    `A${rO},${rO} 0 0 1 ${oE.x.toFixed(2)},${oE.y.toFixed(2)}`,
+    `L${iE.x.toFixed(2)},${iE.y.toFixed(2)}`,
+    `A${rI},${rI} 0 0 0 ${iS.x.toFixed(2)},${iS.y.toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
+
+function Gauge({
+  sentiment,
+  buy,
+  sell,
+}: {
+  sentiment: number | null;
+  buy: number;
+  sell: number;
+}) {
+  const T = useT();
+  const cx = 120;
+  const cy = 118;
+  const rO = 104;
+  const rI = 74;
+
+  // 5 zones across 180°, left (180°) → right (0°), 36° each.
+  const zones = [
+    { from: 180, to: 144, color: T.loss },              // Strong Sell
+    { from: 144, to: 108, color: T.loss + "59" },       // Sell
+    { from: 108, to: 72, color: T.outlineVariant },     // Neutral
+    { from: 72, to: 36, color: T.gain + "59" },         // Buy
+    { from: 36, to: 0, color: T.gain },                 // Strong Buy
+  ];
+
+  const hasData = sentiment != null;
+  // needleAngle: sentiment -1 → 180° (left), +1 → 0° (right), 0 → 90° (up)
+  const needleAngle = hasData ? 90 - sentiment * 90 : 90;
+  const needle = polar(cx, cy, rI - 8, needleAngle);
+
+  // Verdict text
+  let verdict = "Neutral";
+  let verdictColor = T.text3;
+  if (hasData) {
+    if (sentiment <= -0.6) { verdict = "Strong Sell"; verdictColor = T.loss; }
+    else if (sentiment <= -0.2) { verdict = "Sell"; verdictColor = T.loss; }
+    else if (sentiment < 0.2) { verdict = "Neutral"; verdictColor = T.text2; }
+    else if (sentiment < 0.6) { verdict = "Buy"; verdictColor = T.gain; }
+    else { verdict = "Strong Buy"; verdictColor = T.gain; }
+  } else {
+    verdict = "No signals";
+  }
+
+  const labelStyle = { fontFamily: T.fontMono, fontSize: 9.5, fontWeight: 600 } as const;
 
   return (
-    <Link
-      href={`/strategies/${s.id}`}
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 74px 70px 54px",
-        padding: "9px 14px",
-        borderBottom: `1px solid ${T.outlineFaint}`,
-        textDecoration: "none",
-        alignItems: "center",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <svg
+        viewBox="0 0 240 150"
+        style={{ width: "100%", maxWidth: 240, height: "auto", display: "block" }}
+      >
+        {zones.map((z, i) => (
+          <path key={i} d={arcBand(cx, cy, rO, rI, z.from, z.to)} fill={z.color} />
+        ))}
+
+        {/* zone labels */}
+        <text x={120} y={14} textAnchor="middle" fill={T.text3} {...labelStyle}>
+          Neutral
+        </text>
+        <text x={40} y={52} textAnchor="middle" fill={T.loss} {...labelStyle}>
+          Sell
+        </text>
+        <text x={200} y={52} textAnchor="middle" fill={T.gain} {...labelStyle}>
+          Buy
+        </text>
+        <text x={8} y={138} textAnchor="start" fill={T.loss} fontFamily={T.fontMono} fontSize={8}>
+          Strong Sell
+        </text>
+        <text x={232} y={138} textAnchor="end" fill={T.gain} fontFamily={T.fontMono} fontSize={8}>
+          Strong Buy
+        </text>
+
+        {/* needle */}
+        <line
+          x1={cx}
+          y1={cy}
+          x2={needle.x}
+          y2={needle.y}
+          stroke={hasData ? verdictColor : T.outline}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+        <circle cx={cx} cy={cy} r={5.5} fill={hasData ? verdictColor : T.outline} />
+        <circle cx={cx} cy={cy} r={2} fill={T.surface3} />
+      </svg>
+
+      {/* verdict */}
+      <div style={{ textAlign: "center", marginTop: -6 }}>
+        <div
+          style={{
+            fontFamily: T.fontHead,
+            fontSize: 18,
+            fontWeight: 600,
+            color: verdictColor,
+            letterSpacing: -0.2,
+          }}
+        >
+          {verdict}
+        </div>
+        <div
+          style={{
+            fontFamily: T.fontMono,
+            fontSize: 11,
+            color: T.text3,
+            marginTop: 2,
+          }}
+        >
+          {hasData ? (
+            <>
+              <span style={{ color: T.gain }}>{buy} buy</span>
+              {" · "}
+              <span style={{ color: T.loss }}>{sell} sell</span>
+              {" today"}
+            </>
+          ) : (
+            "Deploy a strategy to receive signals"
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Bot rows ───────────────────────────────────────────────────────────────────
+
+function BotRow({ bot }: { bot: DashBot }) {
+  const T = useT();
+  const statusColor =
+    bot.status === "RUNNING" ? T.gain : bot.status === "PAUSED" ? T.warning : T.text3;
+  const pnlColor = bot.pnl >= 0 ? T.gain : T.loss;
+  const sparkColor = bot.pnl >= 0 ? T.gain : T.loss;
+
+  const inner = (
+    <div style={{ padding: "11px 0 12px", borderBottom: `1px dotted ${T.outlineFaint}` }}>
+      {/* Name + status + return */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <span
           style={{
-            width: 5,
-            height: 5,
-            borderRadius: 3,
-            background: c,
+            width: 7,
+            height: 7,
+            borderRadius: 4,
+            background: statusColor,
+            boxShadow: bot.status === "RUNNING" ? `0 0 0 3px ${statusColor}28` : "none",
             flexShrink: 0,
-            boxShadow: s.status === "DEPLOYED" ? `0 0 0 2px ${c}33` : "none",
           }}
         />
         <span
@@ -673,56 +827,44 @@ function StrategyRow({ s }: { s: DashStrategy }) {
             fontSize: 13,
             color: T.text,
             fontWeight: 500,
+            flex: 1,
+            minWidth: 0,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
         >
-          {s.name}
+          {bot.name}
+        </span>
+        <span
+          style={{
+            fontFamily: T.fontMono,
+            fontSize: 12,
+            color: pnlColor,
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            flexShrink: 0,
+          }}
+        >
+          {bot.pnl >= 0 ? "+" : ""}
+          {bot.pnl.toFixed(1)}%
         </span>
       </div>
-      <span
-        style={{
-          textAlign: "right",
-          fontFamily: T.fontMono,
-          fontSize: 12,
-          fontVariantNumeric: "tabular-nums",
-          color:
-            s.bt === "—"
-              ? T.text3
-              : s.bt.startsWith("+")
-              ? T.gain
-              : T.loss,
-        }}
-      >
-        {s.bt}
-      </span>
-      <span
-        style={{
-          textAlign: "right",
-          fontFamily: T.fontMono,
-          fontSize: 12,
-          fontVariantNumeric: "tabular-nums",
-          color: T.text2,
-        }}
-      >
-        {s.sharpe != null ? s.sharpe.toFixed(2) : "—"}
-      </span>
-      <span
-        style={{
-          textAlign: "right",
-          fontFamily: T.fontMono,
-          fontSize: 12,
-          fontVariantNumeric: "tabular-nums",
-          color: s.signals > 0 ? T.deploy : T.text3,
-          fontWeight: s.signals > 0 ? 600 : 400,
-        }}
-      >
-        {s.signals > 0 ? String(s.signals) : "—"}
-      </span>
+      {/* Per-bot graph */}
+      <Sparkline data={bot.spark} color={sparkColor} />
+    </div>
+  );
+
+  return bot.id ? (
+    <Link href={`/bots/${bot.id}`} style={{ textDecoration: "none" }}>
+      {inner}
     </Link>
+  ) : (
+    inner
   );
 }
+
+// ── Signal rows ────────────────────────────────────────────────────────────────
 
 function SignalRow({ sig }: { sig: DashSignal }) {
   const T = useT();
@@ -735,11 +877,10 @@ function SignalRow({ sig }: { sig: DashSignal }) {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        padding: "7px 14px",
-        borderBottom: `1px solid ${T.outlineFaint}`,
+        padding: "9px 0",
+        borderBottom: `1px dotted ${T.outlineFaint}`,
       }}
     >
-      {/* Direction badge */}
       <span
         style={{
           fontFamily: T.fontMono,
@@ -747,15 +888,14 @@ function SignalRow({ sig }: { sig: DashSignal }) {
           fontWeight: 700,
           letterSpacing: 0.4,
           color: dirColor,
-          background: dirColor + "18",
-          padding: "2px 6px",
-          borderRadius: 4,
+          background: dirColor + "1a",
+          padding: "2px 7px",
+          borderRadius: 3,
           flexShrink: 0,
         }}
       >
         {sig.dir}
       </span>
-      {/* Symbol */}
       <span
         style={{
           fontFamily: T.fontMono,
@@ -767,11 +907,10 @@ function SignalRow({ sig }: { sig: DashSignal }) {
       >
         {sig.symbol}
       </span>
-      {/* Price */}
       <span
         style={{
           fontFamily: T.fontMono,
-          fontSize: 11.5,
+          fontSize: 11,
           color: T.text2,
           fontVariantNumeric: "tabular-nums",
           flexShrink: 0,
@@ -779,7 +918,6 @@ function SignalRow({ sig }: { sig: DashSignal }) {
       >
         {sig.price > 0 ? sig.price.toFixed(2) : ""}
       </span>
-      {/* Strategy */}
       <span
         style={{
           fontFamily: T.fontMono,
@@ -793,212 +931,8 @@ function SignalRow({ sig }: { sig: DashSignal }) {
       >
         {sig.strategy}
       </span>
-      {/* Age */}
-      <span
-        style={{
-          fontFamily: T.fontMono,
-          fontSize: 10.5,
-          color: T.text3,
-          flexShrink: 0,
-        }}
-      >
+      <span style={{ fontFamily: T.fontMono, fontSize: 10.5, color: T.text3, flexShrink: 0 }}>
         {sig.age}
-      </span>
-    </div>
-  );
-}
-
-function BotItem({ bot }: { bot: DashBot }) {
-  const T = useT();
-  const isRunning = bot.status === "RUNNING";
-  const dotColor = isRunning ? T.gain : bot.status === "PAUSED" ? T.warning : T.text3;
-  const pnlColor = bot.pnl >= 0 ? T.gain : T.loss;
-
-  const inner = (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "8px 14px",
-        borderBottom: `1px solid ${T.outlineFaint}`,
-      }}
-    >
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          background: dotColor,
-          boxShadow: isRunning ? `0 0 0 2px ${dotColor}33` : "none",
-          flexShrink: 0,
-        }}
-      />
-      <span
-        style={{
-          fontFamily: T.fontSans,
-          fontSize: 13,
-          color: T.text,
-          fontWeight: 500,
-          flex: 1,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {bot.name}
-      </span>
-      <span
-        style={{
-          fontFamily: T.fontMono,
-          fontSize: 10.5,
-          color: T.text3,
-          flex: 1,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {bot.strategy}
-      </span>
-      <span
-        style={{
-          fontFamily: T.fontMono,
-          fontSize: 12,
-          fontVariantNumeric: "tabular-nums",
-          color: pnlColor,
-          fontWeight: 600,
-          flexShrink: 0,
-        }}
-      >
-        {bot.pnl >= 0 ? "+" : ""}
-        {bot.pnl.toFixed(1)}%
-      </span>
-    </div>
-  );
-
-  return bot.id ? (
-    <Link href={`/bots/${bot.id}`} style={{ textDecoration: "none" }}>
-      {inner}
-    </Link>
-  ) : (
-    inner
-  );
-}
-
-function PositionRow({
-  pos,
-  isMobile,
-}: {
-  pos: DashPosition;
-  isMobile: boolean;
-}) {
-  const T = useT();
-  const pnlPct =
-    pos.now != null && pos.entry > 0
-      ? ((pos.now - pos.entry) / pos.entry) * 100
-      : null;
-  const pnlColor =
-    pnlPct == null ? T.text3 : pnlPct >= 0 ? T.gain : T.loss;
-
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: isMobile
-          ? "70px 1fr 80px"
-          : "70px 60px 90px 90px 90px 1fr",
-        padding: "9px 14px",
-        borderBottom: `1px solid ${T.outlineFaint}`,
-        alignItems: "center",
-      }}
-    >
-      {/* Symbol */}
-      <span
-        style={{
-          fontFamily: T.fontMono,
-          fontSize: 13,
-          color: T.text,
-          fontWeight: 600,
-        }}
-      >
-        {pos.sym}
-      </span>
-
-      {/* Qty — desktop only */}
-      {!isMobile && (
-        <span
-          style={{
-            textAlign: "right",
-            fontFamily: T.fontMono,
-            fontSize: 12,
-            color: T.text2,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {pos.qty.toLocaleString()}
-        </span>
-      )}
-
-      {/* Entry — desktop only */}
-      {!isMobile && (
-        <span
-          style={{
-            textAlign: "right",
-            fontFamily: T.fontMono,
-            fontSize: 12,
-            color: T.text2,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {pos.entry.toFixed(2)}
-        </span>
-      )}
-
-      {/* Now — desktop only */}
-      {!isMobile && (
-        <span
-          style={{
-            textAlign: "right",
-            fontFamily: T.fontMono,
-            fontSize: 12,
-            color: T.text2,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {pos.now != null ? pos.now.toFixed(2) : "—"}
-        </span>
-      )}
-
-      {/* P&L */}
-      <span
-        style={{
-          textAlign: "right",
-          fontFamily: T.fontMono,
-          fontSize: 12,
-          fontVariantNumeric: "tabular-nums",
-          color: pnlColor,
-          fontWeight: pnlPct != null ? 600 : 400,
-        }}
-      >
-        {pnlPct != null
-          ? `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`
-          : "—"}
-      </span>
-
-      {/* Strategy */}
-      <span
-        style={{
-          paddingLeft: isMobile ? 0 : 14,
-          fontFamily: T.fontMono,
-          fontSize: 10.5,
-          color: T.text3,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {pos.strat ?? "Manual"}
       </span>
     </div>
   );
